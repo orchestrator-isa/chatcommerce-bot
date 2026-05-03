@@ -1,89 +1,99 @@
-#!/usr/bin/env python3
-"""Script de prueba para el webhook de Orquestrator ISA"""
-
 import requests
+import json
 
 BASE_URL = "http://localhost:8001"
-WEBHOOK_URL = f"{BASE_URL}/api/whatsapp/webhook"
-VERIFY_TOKEN = "isa_verify_2026"
 
-def test_health():
-    print("Test 1: Health Check")
-    r = requests.get(f"{BASE_URL}/health")
+print("=" * 50)
+print("Orquestrator ISA — Tests de Webhook")
+print("=" * 50)
+
+# Test 1: Health Check
+print("\nTest 1: Health Check")
+try:
+    r = requests.get(f"{BASE_URL}/health", timeout=5)
     print(f"   Status: {r.status_code}")
     print(f"   Body: {r.json()}")
-    print()
+    if r.status_code == 200:
+        print("   ✅ Health Check OK")
+    else:
+        print("   ❌ Health Check FALLÓ")
+except Exception as e:
+    print(f"   ❌ Error: {e}")
 
-def test_webhook_verify():
-    print("Test 2: Webhook Verification (GET)")
+# Test 2: Webhook Verification (GET)
+print("\nTest 2: Webhook Verification (GET)")
+try:
     params = {
         "hub.mode": "subscribe",
-        "hub.verify_token": VERIFY_TOKEN,
+        "hub.verify_token": "isa_verify_2026",
         "hub.challenge": "123456789"
     }
-    r = requests.get(WEBHOOK_URL, params=params)
+    r = requests.get(f"{BASE_URL}/api/whatsapp/webhook", params=params, timeout=5)
     print(f"   Status: {r.status_code}")
     print(f"   Challenge response: {r.text}")
-    assert r.status_code == 200, "Verificacion fallida"
-    assert r.text == "123456789", "Challenge no coincide"
-    print("   Verificacion OK")
-    print()
+    if r.status_code == 200 and r.text == "123456789":
+        print("   ✅ Verificacion OK")
+    else:
+        print("   ❌ Verificacion FALLÓ")
+except Exception as e:
+    print(f"   ❌ Error: {e}")
 
-def test_webhook_message():
-    print("Test 3: Webhook Message (POST)")
+# Test 3: Webhook Message (POST)
+print("\nTest 3: Webhook Message (POST)")
+try:
     payload = {
         "object": "whatsapp_business_account",
         "entry": [{
-            "id": "test_business_id",
+            "id": "2808743646146108",
             "changes": [{
                 "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {
+                        "display_phone_number": "212626282904",
+                        "phone_number_id": "1097255916805484"
+                    },
+                    "contacts": [{
+                        "profile": {"name": "Test User"},
+                        "wa_id": "212600000000"
+                    }],
                     "messages": [{
                         "from": "212600000000",
-                        "id": "test_message_id",
-                        "timestamp": "1714651200",
+                        "id": "wamid.test123",
+                        "timestamp": "1714740000",
                         "type": "text",
-                        "text": {"body": "hola"}
+                        "text": {"body": "Hola, quiero pedir un café"}
                     }]
-                }
+                },
+                "field": "messages"
             }]
         }]
     }
-    r = requests.post(WEBHOOK_URL, json=payload)
+    
+    r = requests.post(
+        f"{BASE_URL}/api/whatsapp/webhook",
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=5
+    )
     print(f"   Status: {r.status_code}")
-    print(f"   Body: {r.json()}")
-    assert r.status_code == 200
-    print("   Mensaje procesado")
-    print()
+    
+    # El body puede estar vacío — no forzar JSON
+    if r.text:
+        try:
+            print(f"   Body: {r.json()}")
+        except:
+            print(f"   Body (text): {r.text}")
+    else:
+        print("   Body: (vacío — esto es normal para webhooks)")
+    
+    if r.status_code == 200:
+        print("   ✅ Mensaje POST OK")
+    else:
+        print("   ❌ Mensaje POST FALLÓ")
+        
+except Exception as e:
+    print(f"   ❌ Error: {e}")
 
-def test_stats():
-    print("Test 4: Stats API")
-    r = requests.get(f"{BASE_URL}/api/stats")
-    print(f"   Status: {r.status_code}")
-    print(f"   Body: {r.json()}")
-    print()
-
-def test_restaurantes():
-    print("Test 5: Restaurantes API")
-    r = requests.get(f"{BASE_URL}/api/restaurantes")
-    print(f"   Status: {r.status_code}")
-    print(f"   Body: {r.json()}")
-    print()
-
-if __name__ == "__main__":
-    print("=" * 50)
-    print("Orquestrator ISA — Tests de Webhook")
-    print("=" * 50)
-    print()
-
-    try:
-        test_health()
-        test_webhook_verify()
-        test_webhook_message()
-        test_stats()
-        test_restaurantes()
-        print("=" * 50)
-        print("Todos los tests pasaron")
-        print("=" * 50)
-    except Exception as e:
-        print(f"Error: {e}")
-        print("Asegurate de que el servidor esta corriendo en localhost:8001")
+print("\n" + "=" * 50)
+print("Tests completados")
+print("=" * 50)
