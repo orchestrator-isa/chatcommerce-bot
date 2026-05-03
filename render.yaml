@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: chatcommerce-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: VERIFY_TOKEN
+        value: isa_verify_2026
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: SUPABASE_URL
+        value: https://ktsgmfxokvheosqpoetr.supabase.co
+      - key: SUPABASE_KEY
+        sync: false
+      - key: META_API_VERSION
+        value: v18.0
