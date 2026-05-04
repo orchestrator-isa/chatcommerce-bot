@@ -42,19 +42,24 @@ def get_supabase() -> Client:
 
 # ── Modelos CORREGIDOS: Aliases bilingües ────────────────────────────────
 class ClientCreate(BaseModel):
-    # Acepta: name O nombre, owner_phone O telefono
+    # Campos en inglés (requeridos)
     name: Optional[str] = Field(None, alias="name")
-    nombre: Optional[str] = Field(None, alias="nombre")
     owner_phone: Optional[str] = Field(None, alias="owner_phone")
+
+    # Aliases en español (opcionales)
+    nombre: Optional[str] = Field(None, alias="nombre")
     telefono: Optional[str] = Field(None, alias="telefono")
-    language: str = Field(default="darija_latin")  # Nuevo: darija_latin o darija_arabic
+
+    # Campos comunes
+    language: str = Field(default="darija_latin")
     business_type: str = Field(default="restaurant")
     zone: str = Field(default="centro")
     plan: str = Field(default="basic")
-    
+
     class Config:
         populate_by_name = True  # ← Permite usar alias o nombre real
-    
+
+    # Helper para mapear español → inglés
     def to_db_dict(self) -> dict:
         return {
             "name": self.nombre or self.name or "Sin nombre",
@@ -335,11 +340,11 @@ async def list_clients():
     except Exception as e:
         raise HTTPException(500, detail=str(e))
 
-@app.post("/api/clients")  # ← CREAR RESTAURANTE
+@app.post("/api/clients")
 async def create_client(client: ClientCreate):
     try:
         sb = get_supabase()
-        data = client.to_db_dict()
+        data = client.to_db_dict()  # ← Usa el helper
         data.update({
             "is_active": True, "total_messages": 0, "total_orders": 0,
             "whatsapp_status": "contactar",
@@ -348,8 +353,8 @@ async def create_client(client: ClientCreate):
         res = sb.table("clients").insert(data).execute()
         return {"client": res.data[0]}
     except Exception as e:
-        logger.error(f"[API] Error create_client: {e}")
         raise HTTPException(500, detail=str(e))
+
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
