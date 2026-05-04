@@ -345,14 +345,32 @@ async def create_restaurante(c: ClientCreate):
 # ──────────────────────────────────────────────────────────────────────────────
 # API ENDPOINTS - PLATOS (tabla 'menu_items')
 # ──────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/platos/{client_id}")
 async def get_platos(client_id: str):
     try:
         sb = get_supabase()
-        res = sb.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
+        
+        # Intentar diferentes formatos de UUID
+        possible_ids = [client_id]
+        
+        # Si el UUID viene sin guiones, intentar con guiones
+        if '-' not in client_id and len(client_id) == 32:
+            formatted = f"{client_id[:8]}-{client_id[8:12]}-{client_id[12:16]}-{client_id[16:20]}-{client_id[20:]}"
+            possible_ids.append(formatted)
+        
+        logger.info(f"[API] Buscando platos para: {possible_ids}")
+        
+        all_platos = []
+        for cid in possible_ids:
+            res = sb.table("menu_items").select("*").eq("client_id", cid).eq("is_available", True).execute()
+            all_platos.extend(res.data)
+            if res.data:
+                logger.info(f"[API] Encontrados {len(res.data)} platos con {cid}")
+                break
         
         platos = []
-        for p in res.data:
+        for p in all_platos:
             platos.append({
                 "id_plato": p.get("id"),
                 "dish_name": p.get("dish_name"),
@@ -363,7 +381,7 @@ async def get_platos(client_id: str):
         
         return {"platos": platos, "count": len(platos)}
     except Exception as e:
-        logger.error(f"[API] get_platos: {e}")
+        logger.error(f"[API] get_platos error: {e}", exc_info=True)
         raise HTTPException(500, detail=str(e))
 
 @app.post("/api/platos")
