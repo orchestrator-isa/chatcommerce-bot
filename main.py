@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Orquestrator ISA — ChatCommerce Bot v2.3 (FIXED)"""
+"""Orquestrator ISA — ChatCommerce Bot v2.3 (MINIMAL TESTED)"""
 import os, logging, json
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -208,8 +208,8 @@ async def create_item(i: MenuItemCreate):
         cid = i.menu_id or i.client_id
         if not cid:
             cr = sb.table("clients").select("id").eq("is_active",True).limit(1).execute()
-            if cr.data:  # ✅ FIX: verificar que hay datos
-                cid = cr.data[0]["id"]  # ✅ FIX: asignar fuera del if
+            if cr.data:
+                cid = cr.data[0]["id"]
         if not cid:
             raise HTTPException(400, detail="No client_id found")
         res = sb.table("menu_items").insert(i.to_db(cid)).execute()
