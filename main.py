@@ -384,45 +384,6 @@ async def get_platos(client_id: str):
         logger.error(f"[API] get_platos error: {e}", exc_info=True)
         raise HTTPException(500, detail=str(e))
 
-@app.get("/api/platos/{client_id}")
-async def get_platos(client_id: str):
-    """Obtiene todos los platos de un restaurante"""
-    try:
-        sb = get_supabase()
-        
-        # Limpiar el client_id (quitar espacios, convertir a minúsculas)
-        clean_id = client_id.strip().lower()
-        
-        logger.info(f"[API] Buscando platos para restaurant: {clean_id}")
-        
-        # Buscar platos con el client_id exacto
-        response = sb.table("menu_items")\
-            .select("*")\
-            .eq("client_id", clean_id)\
-            .eq("is_available", True)\
-            .execute()
-        
-        logger.info(f"[API] Encontrados {len(response.data)} platos")
-        
-        # Formatear la respuesta
-        platos = []
-        for item in response.data:
-            platos.append({
-                "id_plato": item.get("id"),
-                "nombre": item.get("dish_name"),  # ← mapeo dish_name -> nombre
-                "precio": item.get("price"),       # ← mapeo price -> precio
-                "descripcion": item.get("description", ""),
-                "is_available": item.get("is_available"),
-                "is_star": item.get("is_star", False),
-                "created_at": item.get("created_at")
-            })
-        
-        return {"platos": platos, "count": len(platos)}
-        
-    except Exception as e:
-        logger.error(f"[API] Error en get_platos: {e}", exc_info=True)
-        raise HTTPException(500, detail=f"Error al obtener platos: {str(e)}")
-
 @app.post("/api/debug/crear_plato_directo")
 async def debug_crear_plato(client_id: str, dish_name: str, price: int):
     """Endpoint temporal para debug - crear plato con parámetros directos"""
@@ -453,6 +414,110 @@ async def debug_crear_plato(client_id: str, dish_name: str, price: int):
             "error": str(e),
             "type": type(e).__name__
         }
+# ──────────────────────────────────────────────────────────────────────────────
+# API ENDPOINTS - PLATOS (corregido)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/platos/{client_id}")
+async def get_platos(client_id: str):
+    """Obtiene todos los platos de un restaurante"""
+    try:
+        sb = get_supabase()
+        
+        logger.info(f"🔍 Buscando platos para client_id: {client_id}")
+        
+        # Buscar platos con el client_id exacto
+        response = sb.table("menu_items")\
+            .select("*")\
+            .eq("client_id", client_id)\
+            .eq("is_available", True)\
+            .execute()
+        
+        logger.info(f"✅ Encontrados {len(response.data)} platos")
+        
+        # Formatear la respuesta (mapeando inglés -> español)
+        platos = []
+        for item in response.data:
+            platos.append({
+                "id_plato": item.get("id"),
+                "nombre": item.get("dish_name"),
+                "precio": item.get("price"),
+                "descripcion": item.get("description", ""),
+                "is_available": item.get("is_available"),
+                "created_at": item.get("created_at")
+            })
+        
+        return {"platos": platos, "count": len(platos)}
+        
+    except Exception as e:
+        logger.error(f"❌ Error en get_platos: {e}", exc_info=True)
+        raise HTTPException(500, detail=f"Error al obtener platos: {str(e)}")
+
+
+@app.post("/api/platos")
+async def create_plato(item: dict):
+    """Crea un nuevo plato"""
+    try:
+        sb = get_supabase()
+        
+        # Validar campos requeridos
+        if not item.get("client_id") or not item.get("nombre"):
+            raise HTTPException(400, detail="Faltan campos requeridos: client_id y nombre")
+        
+        # Mapeo de español a inglés para la BD
+        data = {
+            "client_id": item.get("client_id"),
+            "dish_name": item.get("nombre"),
+            "price": item.get("precio", 0),
+            "description": item.get("descripcion", ""),
+            "is_available": True
+        }
+        
+        logger.info(f"📝 Creando plato: {data}")
+        response = sb.table("menu_items").insert(data).execute()
+        
+        if response.data:
+            nuevo = response.data[0]
+            return {"plato": {
+                "id_plato": nuevo.get("id"),
+                "nombre": nuevo.get("dish_name"),
+                "precio": nuevo.get("price"),
+                "descripcion": nuevo.get("description", "")
+            }}
+        return {"plato": None}
+        
+    except Exception as e:
+        logger.error(f"❌ Error en create_plato: {e}", exc_info=True)
+        raise HTTPException(500, detail=str(e))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ALIAS EN INGLÉS (PARA COMPATIBILIDAD)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/menu/{client_id}")
+async def get_menu(client_id: str):
+    """Alias en inglés para /api/platos/{client_id}"""
+    return await get_platos(client_id)
+
+
+@app.post("/api/menu")
+async def create_menu_item(item: dict):
+    """Alias en inglés para crear plato"""
+    # Convertir formato inglés a español
+    plato_data = {
+        "client_id": item.get("client_id") or item.get("menu_id"),
+        "nombre": item.get("dish_name") or item.get("nombre"),
+        "precio": item.get("price") or item.get("precio"),
+        "descripcion": item.get("description", "")
+    }
+    return await create_plato(plato_data)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENDPOINTS DE DEBUG (para verificar datos)
+# ──────────────────────────────────────────────────────────────────────────────
+
 @app.get("/api/debug/verificar_platos/{client_id}")
 async def verificar_platos(client_id: str):
     """Verifica si existen platos para un client_id específico"""
@@ -469,15 +534,27 @@ async def verificar_platos(client_id: str):
             "restaurante_existe": len(client_check.data) > 0,
             "datos_restaurante": client_check.data[0] if client_check.data else None,
             "total_platos_encontrados": len(platos.data),
-            "platos": platos.data[:5] if platos.data else [],
+            "platos": platos.data[:10] if platos.data else [],
             "client_id_buscado": client_id
         }
     except Exception as e:
-        return {
-            "error": str(e),
-            "client_id_buscado": client_id
-        }
+        return {"error": str(e), "client_id_buscado": client_id}
 
+
+@app.get("/api/debug/todos_platos")
+async def debug_todos_platos():
+    """Muestra todos los platos en la BD (sin filtrar)"""
+    try:
+        sb = get_supabase()
+        response = sb.table("menu_items").select("*").execute()
+        
+        return {
+            "total_platos": len(response.data),
+            "platos": response.data[:20],  # primeros 20
+            "todos_client_ids": list(set([p.get("client_id") for p in response.data if p.get("client_id")]))
+        }
+    except Exception as e:
+        return {"error": str(e)}
 # ──────────────────────────────────────────────────────────────────────────────
 # API ENDPOINTS - ESTADÍSTICAS
 # ──────────────────────────────────────────────────────────────────────────────
