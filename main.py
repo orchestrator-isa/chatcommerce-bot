@@ -42,7 +42,7 @@ def get_supabase() -> Client:
 
 # ── Modelos CORREGIDOS: Aliases bilingües ────────────────────────────────
 class ClientCreate(BaseModel):
-    # Campos en inglés (requeridos)
+    # Campos en inglés(requeridos)
     name: Optional[str] = Field(None, alias="name")
     owner_phone: Optional[str] = Field(None, alias="owner_phone")
 
