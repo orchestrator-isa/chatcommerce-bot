@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Orquestrator ISA — ChatCommerce Bot v2.2 (FIXED)
+Orquestrator ISA — ChatCommerce Bot v2.3 (FIXED)
 FastAPI + WhatsApp Business API + Supabase
-Darija Dual: árabe script + latino romanizado + 6 idiomas adicionales
+Darija Dual: árabe script + latino romanizado + aliases bilingües API
 Deploy: Render.com | Tetouan, Marruecos
 """
 import os, json, logging
@@ -40,26 +40,21 @@ def get_supabase() -> Client:
         logger.info("[SUPABASE] Cliente inicializado")
     return _supabase
 
-# ── Modelos CORREGIDOS: Aliases bilingües ────────────────────────────────
+# ── Modelos CORREGIDOS: Aliases bilingües + Optional ────────────────────────────────
 class ClientCreate(BaseModel):
-    # Campos en inglés(requeridos)
+    # Campos en inglés (requeridos) con aliases en español
     name: Optional[str] = Field(None, alias="name")
-    owner_phone: Optional[str] = Field(None, alias="owner_phone")
-
-    # Aliases en español (opcionales)
     nombre: Optional[str] = Field(None, alias="nombre")
+    owner_phone: Optional[str] = Field(None, alias="owner_phone")
     telefono: Optional[str] = Field(None, alias="telefono")
-
-    # Campos comunes
     language: str = Field(default="darija_latin")
     business_type: str = Field(default="restaurant")
     zone: str = Field(default="centro")
     plan: str = Field(default="basic")
-
+    
     class Config:
         populate_by_name = True  # ← Permite usar alias o nombre real
-
-    # Helper para mapear español → inglés
+    
     def to_db_dict(self) -> dict:
         return {
             "name": self.nombre or self.name or "Sin nombre",
@@ -71,7 +66,6 @@ class ClientCreate(BaseModel):
         }
 
 class MenuItemCreate(BaseModel):
-    # Acepta: client_id O menu_id, dish_name O nombre, etc.
     client_id: Optional[str] = Field(None, alias="client_id")
     menu_id: Optional[str] = Field(None, alias="menu_id")
     category: str = Field(default="")
@@ -99,17 +93,8 @@ class MenuItemCreate(BaseModel):
 
 # ── NLP: Darija Dual + 6 idiomas ───────────────────────────────────────
 class DarijaNLP:
-    # Darija en script árabe (letras árabes)
-    DARIJA_ARABIC = [
-        "سلام", "مرحبا", "بغيت", "شنو", "واش", "كاين", "غير", "دابا", "علاش",
-        "ف", "و", "ولا", "عليك", "عندي", "حتا", "قلبي", "بزاف", "شوية"
-    ]
-    # Darija romanizado (latino)
-    DARIJA_LATIN = [
-        "salam", "marhba", "bghit", "chno", "wash", "kayn", "ghir", "daba", "3lach",
-        "f", "w", "wlla", "3lik", "3ndi", "7ta", "9albi", "bzaf", "chwiya",
-        "kifach", "wakha", "ayeh", "la", "kho", "khti", "merci bzzaf", "vale safi"
-    ]
+    DARIJA_ARABIC = ["سلام", "مرحبا", "بغيت", "شنو", "واش", "كاين", "غير", "دابا", "علاش", "ف", "و", "ولا", "عليك", "عندي", "حتا", "قلبي", "بزاف", "شوية"]
+    DARIJA_LATIN = ["salam", "marhba", "bghit", "chno", "wash", "kayn", "ghir", "daba", "3lach", "f", "w", "wlla", "3lik", "3ndi", "7ta", "9albi", "bzaf", "chwiya", "kifach", "wakha", "ayeh", "la", "kho", "khti", "merci bzzaf", "vale safi"]
     
     LANG_KEYWORDS = {
         "arabic": ["مرحبا", "طلب", "شكرا", "كم", "ثمن", "تاكوز", "ساندويتش"],
@@ -123,23 +108,19 @@ class DarijaNLP:
     @classmethod
     def detect_language(cls, text: str) -> str:
         text_lower = text.lower().strip()
-        
-        # === PRIORIDAD 1: Darija árabe (script) ===
-        if any(char in text for char in ["\u0600", "\u0601", "\u0602", "\u0603"]):
+        # Darija árabe (script)
+        if any("\u0600" <= c <= "\u06FF" for c in text):
             if any(kw in text for kw in cls.DARIJA_ARABIC):
                 return "darija_arabic"
-            return "arabic"  # Árabe estándar
-        
-        # === PRIORIDAD 2: Darija latino (romanizado) ===
+            return "arabic"
+        # Darija latino (romanizado)
         if any(kw in text_lower for kw in cls.DARIJA_LATIN):
             return "darija_latin"
-        
-        # === Otros idiomas ===
+        # Otros idiomas
         for lang, keywords in cls.LANG_KEYWORDS.items():
             if any(kw in text_lower for kw in keywords):
                 return lang
-        
-        return "darija_latin"  # Fallback: asumimos Tetouan
+        return "darija_latin"
     
     @classmethod
     def detect_intent(cls, text: str) -> str:
@@ -165,10 +146,7 @@ class BotLogic:
         "greeting": {
             "darija_arabic": "👋 *سلام! مرحبا بيك* 😊\nأنا مساعد الطلبات ديالك فـ WhatsApp.\n🍴 *شوف المنيو* — كتب \"menu\"\n📍 *المطاعم* — كتب \"lista\"\n❓ *مساعدة* — كتب \"ayuda\"",
             "darija_latin": "👋 *Salam! Marhba bik* 😊\nAna l'assistant dyalek dyal l-commandes 3la WhatsApp.\n🍴 *Shuf lmenu* — kteb \"menu\"\n📍 *Restaurants* — kteb \"lista\"\n❓ *M3awda* — kteb \"ayuda\"",
-            "arabic": "👋 *السلام عليكم* 😊\nأنا مساعدك للطلبات عبر واتساب.\n🍴 *عرض القائمة* — اكتب \"menu\"\n📍 *المطاعم* — اكتب \"lista\"",
             "spanish": "👋 *¡Hola! Bienvenido* 😊\nSoy tu asistente de pedidos por WhatsApp.\n🍴 *Ver menú* — escribe \"menu\"\n📍 *Restaurantes* — escribe \"lista\"",
-            "french": "👋 *Bonjour! Bienvenue* 😊\nJe suis votre assistant de commandes WhatsApp.\n🍴 *Voir le menu* — tapez \"menu\"\n📍 *Restaurants* — tapez \"lista\"",
-            "english": "👋 *Hello! Welcome* 😊\nI'm your WhatsApp ordering assistant.\n🍴 *See menu* — type \"menu\"\n📍 *Restaurants* — type \"lista\"",
         },
         "help": {
             "darija_arabic": "📋 *شنو تقدر دير:*\n• *menu* — شوف الماكول\n• *lista* — شوف المطاعم",
@@ -192,19 +170,11 @@ class BotLogic:
         lang = DarijaNLP.detect_language(message_text)
         intent = DarijaNLP.detect_intent(message_text)
         logger.info(f"[BOT] {from_number[-4:]} | lang={lang} | intent={intent}")
-        
-        # Guardar mensaje (silencioso si falla)
         try:
             sb = get_supabase()
-            sb.table("messages").insert({
-                "from_number": from_number,
-                "message_text": message_text,
-                "direction": "incoming",
-                "created_at": datetime.utcnow().isoformat(),
-            }).execute()
-        except: pass
-        
-        # Respuestas por intención
+            sb.table("messages").insert({"from_number": from_number, "message_text": message_text, "direction": "incoming", "created_at": datetime.utcnow().isoformat()}).execute()
+        except Exception as e:
+            logger.warning(f"[DB] No se pudo guardar: {e}")
         if intent in ["greeting", "help", "cancel", "confirm"]:
             return cls._get(intent, lang)
         if intent == "menu":
@@ -250,7 +220,6 @@ class BotLogic:
 # ── WhatsApp Service ─────────────────────────────────────────────────
 class WhatsAppService:
     BASE_URL = f"https://graph.facebook.com/{META_API_VERSION}"
-    
     @classmethod
     async def send_text(cls, to: str, message: str) -> Dict:
         if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
@@ -268,25 +237,19 @@ class WhatsAppService:
 # ── Lifespan ────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("[STARTUP] Orquestrator ISA v2.2 iniciando...")
+    logger.info("[STARTUP] Orquestrator ISA v2.3 iniciando...")
     yield
     logger.info("[SHUTDOWN] Orquestrator ISA detenido.")
 
 # ── FastAPI App ─────────────────────────────────────────────────────
-app = FastAPI(title="Orquestrator ISA", description="WhatsApp Bot Darija Dual + 6 idiomas", version="2.2.0", lifespan=lifespan)
+app = FastAPI(title="Orquestrator ISA", description="WhatsApp Bot Darija Dual + aliases bilingües", version="2.3.0", lifespan=lifespan)
 
 # ← CORS MIDDLEWARE
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "Orquestrator ISA", "version": "2.2.0", "languages": ["darija_arabic", "darija_latin", "arabic", "french", "spanish", "english", "german", "turkish"]}
+    return {"status": "ok", "service": "Orquestrator ISA", "version": "2.3.0", "languages": ["darija_arabic", "darija_latin", "arabic", "french", "spanish", "english", "german", "turkish"]}
 
 @app.get("/health")
 async def health():
@@ -309,7 +272,8 @@ async def webhook_verify(request: Request):
 async def webhook_post(request: Request, background_tasks: BackgroundTasks):
     try:
         body = await request.json()
-    except:
+    except Exception as e:
+        logger.error(f"[WEBHOOK] JSON error: {e}")
         return JSONResponse({"status": "error"}, status_code=400)
     background_tasks.add_task(process_payload, body)
     return JSONResponse({"status": "ok"}, status_code=200)
@@ -338,23 +302,22 @@ async def list_clients():
         res = sb.table("clients").select("*").eq("is_active", True).order("google_reviews", desc=True).execute()
         return {"clients": res.data, "count": len(res.data)}
     except Exception as e:
+        logger.error(f"[API] Error list_clients: {e}")
         raise HTTPException(500, detail=str(e))
 
 @app.post("/api/clients")
 async def create_client(client: ClientCreate):
     try:
+        logger.info(f"[API] create_client request: {client.dict()}")
         sb = get_supabase()
-        data = client.to_db_dict()  # ← Usa el helper
-        data.update({
-            "is_active": True, "total_messages": 0, "total_orders": 0,
-            "whatsapp_status": "contactar",
-            "trial_ends_at": (datetime.utcnow() + timedelta(days=20)).date().isoformat(),
-        })
+        data = client.to_db_dict()
+        data.update({"is_active": True, "total_messages": 0, "total_orders": 0, "whatsapp_status": "contactar", "trial_ends_at": (datetime.utcnow() + timedelta(days=20)).date().isoformat()})
         res = sb.table("clients").insert(data).execute()
+        logger.info(f"[API] create_client success: {res.data[0].get('id')}")
         return {"client": res.data[0]}
     except Exception as e:
-        raise HTTPException(500, detail=str(e))
-
+        logger.error(f"[API] Error create_client: {e}", exc_info=True)
+        raise HTTPException(500, detail=f"{str(e)} - Verifica que envías name/nombre y owner_phone/telefono")
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
@@ -363,13 +326,14 @@ async def get_menu(client_id: str):
         res = sb.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
         return {"menu_items": res.data, "count": len(res.data)}
     except Exception as e:
+        logger.error(f"[API] Error get_menu: {e}")
         raise HTTPException(500, detail=str(e))
 
-@app.post("/api/menu")  # ← CREAR PLATO
+@app.post("/api/menu")
 async def create_menu_item(item: MenuItemCreate):
     try:
+        logger.info(f"[API] create_menu_item request: {item.dict()}")
         sb = get_supabase()
-        # Si no viene client_id, buscar el primer restaurante activo
         client_id = item.menu_id or item.client_id
         if not client_id:
             cr = sb.table("clients").select("id").eq("is_active", True).limit(1).execute()
@@ -377,13 +341,13 @@ async def create_menu_item(item: MenuItemCreate):
                 client_id = cr.data[0]["id"]
         if not client_id:
             raise HTTPException(400, detail="No se encontró client_id ni restaurante activo")
-        
         data = item.to_db_dict(client_id)
         res = sb.table("menu_items").insert(data).execute()
+        logger.info(f"[API] create_menu_item success: {res.data[0].get('id')}")
         return {"menu_item": res.data[0]}
     except Exception as e:
-        logger.error(f"[API] Error create_menu_item: {e}")
-        raise HTTPException(500, detail=str(e))
+        logger.error(f"[API] Error create_menu_item: {e}", exc_info=True)
+        raise HTTPException(500, detail=f"{str(e)} - Verifica que envías menu_id/client_id y dish_name/nombre y price/precio")
 
 @app.get("/api/stats")
 async def get_stats():
