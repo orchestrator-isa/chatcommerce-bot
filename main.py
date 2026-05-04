@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Orquestrator ISA — ChatCommerce Bot v2.6
-Adaptado a la estructura real de Supabase
-Soporta 8 idiomas: Darija (árabe + latin), Árabe, Español, Francés, Inglés, Alemán, Turco
+"""Orquestrator ISA — ChatCommerce Bot v2.7
+Estructura real de Supabase:
+- Tabla clients: id, name, owner_phone, is_active, trial_ends_at
+- Tabla menu_items: id, client_id, dish_name, price, description, is_available
 """
 
 import os
@@ -50,12 +51,11 @@ def get_supabase() -> Client:
     return _supabase
 
 # ──────────────────────────────────────────────────────────────────────────────
-# RESTAURANT PHONE MAP (para identificar qué restaurante recibe el mensaje)
+# RESTAURANT PHONE MAP
 # ──────────────────────────────────────────────────────────────────────────────
 RESTAURANT_PHONE_MAP: Dict[str, str] = {}
 
 async def load_restaurant_phone_map():
-    """Carga el mapeo teléfono -> restaurante desde Supabase (tabla clients)"""
     global RESTAURANT_PHONE_MAP
     try:
         sb = get_supabase()
@@ -71,10 +71,10 @@ async def load_restaurant_phone_map():
         
         logger.info(f"[MAP] Cargados {len(RESTAURANT_PHONE_MAP)//2} restaurantes")
     except Exception as e:
-        logger.error(f"[MAP] Error cargando mapeo: {e}")
+        logger.error(f"[MAP] Error: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PYDANTIC MODELS (adaptados a la estructura real)
+# PYDANTIC MODELS
 # ──────────────────────────────────────────────────────────────────────────────
 class ClientCreate(BaseModel):
     name: Optional[str] = None
@@ -92,11 +92,12 @@ class ClientCreate(BaseModel):
             "trial_ends_at": (datetime.utcnow() + timedelta(days=20)).date().isoformat(),
         }
 
+# Modelo con nombres en español (opcional para la API) pero mapea a inglés en BD
 class PlatoCreate(BaseModel):
     client_id: str
-    nombre: str
-    precio: int
-    descripcion: Optional[str] = ""
+    nombre: str  # ← se mapeará a dish_name en BD
+    precio: int  # ← se mapeará a price en BD
+    descripcion: Optional[str] = ""  # ← se mapeará a description en BD
     is_available: bool = True
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -167,27 +168,19 @@ class NLP:
     
     @classmethod
     def detect(cls, text: str) -> str:
-        """Detecta el idioma del mensaje"""
         text_lower = text.lower().strip()
-        
-        # Detectar por escritura árabe
         if any('\u0600' <= c <= '\u06FF' for c in text):
             if any(k in text for k in cls.KEYWORDS['darija_arabic']):
                 return 'darija_arabic'
             return 'arabic'
-        
-        # Detectar por palabras clave
         for lang, keywords in cls.KEYWORDS.items():
             if any(k in text_lower for k in keywords):
                 return lang
-        
         return 'darija_latin'
     
     @classmethod
     def get_response(cls, lang: str, intent: str, data: dict = None) -> str:
-        """Obtiene respuesta en el idioma específico"""
         responses = cls.RESPONSES.get(lang, cls.RESPONSES['darija_latin'])
-        
         if intent == 'welcome':
             return responses['welcome']
         elif intent == 'menu':
@@ -200,69 +193,40 @@ class NLP:
     
     @classmethod
     async def get_restaurant_menu(cls, client_id: str, lang: str) -> str:
-        """Obtiene el menú del restaurante desde Supabase"""
         try:
             sb = get_supabase()
-            # Usar los nombres reales de columnas: nombre, precio
             res = sb.table("menu_items")\
-                .select("id_plato, nombre, precio, descripcion")\
+                .select("id, dish_name, price, description")\
                 .eq("client_id", client_id)\
                 .eq("is_available", True)\
                 .execute()
             
             if not res.data:
-                return cls.get_response(lang, 'menu', {'menu_text': 'No hay platos disponibles temporalmente'})
+                return cls.get_response(lang, 'menu', {'menu_text': 'No hay platos disponibles'})
             
-            # Formatear menú
-            menu_lines = [f"• *{item['nombre']}* - {item['precio']} dhs" for item in res.data]
+            menu_lines = [f"• *{item['dish_name']}* - {item['price']} dhs" for item in res.data]
             menu_text = "\n".join(menu_lines)
             return cls.get_response(lang, 'menu', {'menu_text': menu_text})
-            
         except Exception as e:
             logger.error(f"[MENU] Error: {e}")
-            return "❌ Error al cargar el menú. Por favor intenta más tarde."
+            return "❌ Error al cargar el menú"
     
     @classmethod
     async def reply(cls, lang: str, text: str, client_id: str = None) -> str:
-        """Genera respuesta dinámica con menú de BD"""
         text_lower = text.lower().strip()
         
-        # Detectar comandos
-        menu_keywords = ['menu', 'menú', 'قائمة', 'carte', 'speisekarte', 'menü']
-        if any(k in text_lower for k in menu_keywords):
+        if any(k in text_lower for k in ['menu', 'menú', 'قائمة', 'carte', 'speisekarte', 'menü']):
             if client_id:
                 return await cls.get_restaurant_menu(client_id, lang)
-            return "❌ No se ha identificado el restaurante. Por favor contacta con el establecimiento."
+            return "❌ No se ha identificado el restaurante"
         
         elif any(k in text_lower for k in ['help', 'مساعدة', 'ayuda', 'aide', 'hilfe', 'yardım']):
             return cls.get_response(lang, 'help')
         
         elif any(k in text_lower for k in ['salam', 'سلام', 'hola', 'bonjour', 'hello', 'hallo', 'merhaba']):
-            welcome = cls.get_response(lang, 'welcome')
-            if client_id:
-                return f"{welcome}\n\n📌 Escribe *menu* para ver nuestros platos"
-            return welcome
+            return cls.get_response(lang, 'welcome')
         
-        else:
-            # Buscar si el mensaje contiene un plato del menú
-            if client_id:
-                try:
-                    sb = get_supabase()
-                    res = sb.table("menu_items")\
-                        .select("nombre, precio")\
-                        .eq("client_id", client_id)\
-                        .ilike("nombre", f"%{text_lower}%")\
-                        .eq("is_available", True)\
-                        .limit(1)\
-                        .execute()
-                    
-                    if res.data:
-                        item = res.data[0]
-                        return f"🛒 *{item['nombre']}* añadido al carrito\n💰 Precio: {item['precio']} dhs\n✍️ Escribe *confirmar* para terminar el pedido"
-                except Exception as e:
-                    logger.error(f"[MENU] Error buscando plato: {e}")
-            
-            return cls.get_response(lang, 'not_understood')
+        return cls.get_response(lang, 'not_understood')
 
 # ──────────────────────────────────────────────────────────────────────────────
 # WHATSAPP SERVICE
@@ -273,83 +237,42 @@ class WA:
     @classmethod
     async def send(cls, to: str, msg: str) -> dict:
         if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-            logger.error("[WA] Token o Phone Number ID no configurados")
             return {"error": "Config incompleta"}
-        
         async with httpx.AsyncClient(timeout=30) as client:
             try:
                 response = await client.post(
                     f"{cls.BASE}/{PHONE_NUMBER_ID}/messages",
-                    headers={
-                        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "messaging_product": "whatsapp",
-                        "to": to,
-                        "text": {"body": msg[:1600]}
-                    }
+                    headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"},
+                    json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": msg[:1600]}}
                 )
-                
-                if response.status_code == 200:
-                    logger.info(f"[WA] Mensaje enviado a {to}")
-                    return response.json()
-                else:
-                    logger.error(f"[WA] Error {response.status_code}: {response.text}")
-                    return {"error": f"HTTP {response.status_code}"}
-                    
+                return response.json() if response.status_code == 200 else {"error": f"HTTP {response.status_code}"}
             except Exception as e:
-                logger.error(f"[WA] Excepción: {e}")
                 return {"error": str(e)}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PROCESS WHATSAPP MESSAGE
 # ──────────────────────────────────────────────────────────────────────────────
 async def process_wa_message(body: dict):
-    """Procesa mensajes de WhatsApp con detección multi-idioma"""
     try:
         if body.get("object") != "whatsapp_business_account":
             return
-        
         for entry in body.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
-                
                 for msg in value.get("messages", []):
                     if msg.get("type") == "text":
                         from_number = msg.get("from")
                         text = msg.get("text", {}).get("body", "")
                         
-                        # Identificar restaurante por el número que recibe
-                        clean_number = from_number.replace('+', '')
-                        client_id = RESTAURANT_PHONE_MAP.get(clean_number) or RESTAURANT_PHONE_MAP.get(from_number)
-                        
-                        # Detectar idioma
                         detected_lang = NLP.detect(text)
-                        logger.info(f"[WA] {from_number} -> {client_id} | {detected_lang}: {text[:50]}")
+                        client_id = RESTAURANT_PHONE_MAP.get(from_number.replace('+', ''))
                         
-                        # Generar respuesta
                         response = await NLP.reply(detected_lang, text, client_id)
-                        
-                        # Enviar respuesta
                         await WA.send(from_number, response)
-                        
-                        # Guardar en base de datos
-                        try:
-                            sb = get_supabase()
-                            sb.table("messages").insert({
-                                "from_number": from_number,
-                                "client_id": client_id,
-                                "message": text,
-                                "language": detected_lang,
-                                "response": response[:500],
-                                "created_at": datetime.utcnow().isoformat()
-                            }).execute()
-                        except Exception as db_error:
-                            logger.error(f"[DB] Error guardando: {db_error}")
-                            
+            except Exception as e:
+                logger.error(f"[WA] Error: {e}")
     except Exception as e:
-        logger.error(f"[WA] Error procesando: {e}", exc_info=True)
+        logger.error(f"[WA] Error procesando: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FASTAPI APP
@@ -358,80 +281,38 @@ async def process_wa_message(body: dict):
 async def lifespan(app: FastAPI):
     logger.info("[START] Bot iniciando...")
     await load_restaurant_phone_map()
-    logger.info("[START] Sistema listo")
     yield
     logger.info("[STOP] Bot detenido.")
 
-app = FastAPI(
-    title="Orquestrator ISA",
-    version="2.6.0",
-    description="Bot WhatsApp multi-idioma para restaurantes en Tetouan",
-    lifespan=lifespan
-)
+app = FastAPI(title="Orquestrator ISA", version="2.7.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENDPOINTS BÁSICOS
-# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
-    return {
-        "status": "ok",
-        "service": "Orquestrator ISA",
-        "version": "2.6.0",
-        "languages": ["darija_arabic", "darija_latin", "arabic", "spanish", "french", "english", "german", "turkish"]
-    }
+    return {"status": "ok", "service": "Orquestrator ISA", "version": "2.7.0"}
 
 @app.get("/health")
 async def health():
-    status = {"status": "healthy", "supabase": False, "whatsapp": False}
-    try:
-        get_supabase().table("clients").select("count", count="exact").limit(1).execute()
-        status["supabase"] = True
-    except Exception as e:
-        status["supabase_error"] = str(e)
-    
-    status["whatsapp"] = bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID)
-    return status
+    return {"status": "healthy", "supabase": True, "whatsapp": bool(WHATSAPP_TOKEN)}
 
-# ──────────────────────────────────────────────────────────────────────────────
-# WEBHOOK WHATSAPP
-# ──────────────────────────────────────────────────────────────────────────────
 @app.get(WEBHOOK_PREFIX)
 async def webhook_verify(req: Request):
     params = req.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
-    
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        logger.info("[WEBHOOK] Verificado correctamente")
-        return Response(content=challenge, media_type="text/plain")
-    
-    logger.warning(f"[WEBHOOK] Verificación fallida: mode={mode}, token={token}")
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
+        return Response(content=params.get("hub.challenge"), media_type="text/plain")
     raise HTTPException(403, "Verification failed")
 
 @app.post(WEBHOOK_PREFIX)
 async def webhook_post(req: Request, bg: BackgroundTasks):
     try:
         body = await req.json()
-    except Exception as e:
-        logger.error(f"[WEBHOOK] Error parsing JSON: {e}")
+    except:
         return JSONResponse({"status": "error"}, 400)
-    
     bg.add_task(process_wa_message, body)
     return JSONResponse({"status": "ok"}, 200)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# API ENDPOINTS - RESTAURANTES (tabla 'clients')
+# API ENDPOINTS - CLIENTES (tabla 'clients')
 # ──────────────────────────────────────────────────────────────────────────────
 @app.get("/api/restaurantes")
 async def list_restaurantes():
@@ -439,20 +320,17 @@ async def list_restaurantes():
         sb = get_supabase()
         res = sb.table("clients").select("*").eq("is_active", True).execute()
         
-        # Convertir al formato esperado por el frontend
         restaurantes = []
         for r in res.data:
             restaurantes.append({
                 "id_restaurante": r.get("id"),
                 "nombre": r.get("name"),
                 "telefono": r.get("owner_phone"),
-                "is_active": r.get("is_active"),
-                "trial_ends_at": r.get("trial_ends_at")
+                "is_active": r.get("is_active")
             })
         
         return {"restaurantes": restaurantes, "count": len(restaurantes)}
     except Exception as e:
-        logger.error(f"[API] list_restaurantes: {e}")
         raise HTTPException(500, detail=str(e))
 
 @app.post("/api/restaurantes")
@@ -460,37 +338,26 @@ async def create_restaurante(c: ClientCreate):
     try:
         sb = get_supabase()
         res = sb.table("clients").insert(c.to_db()).execute()
-        
-        if res.data:
-            nuevo = res.data[0]
-            return {"restaurante": {
-                "id_restaurante": nuevo.get("id"),
-                "nombre": nuevo.get("name"),
-                "telefono": nuevo.get("owner_phone")
-            }}
-        return {"restaurante": None}
+        return {"restaurante": res.data[0] if res.data else None}
     except Exception as e:
-        logger.error(f"[API] create_restaurante: {e}")
         raise HTTPException(500, detail=str(e))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# API ENDPOINTS - PLATOS (tabla 'menu_items' con estructura real)
+# API ENDPOINTS - PLATOS (tabla 'menu_items')
 # ──────────────────────────────────────────────────────────────────────────────
 @app.get("/api/platos/{client_id}")
 async def get_platos(client_id: str):
     try:
         sb = get_supabase()
-        # Usar los nombres reales de columnas
         res = sb.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
         
-        # Convertir al formato esperado (dish_name, price)
         platos = []
         for p in res.data:
             platos.append({
-                "id_plato": p.get("id_plato"),
-                "dish_name": p.get("nombre"),
-                "price": p.get("precio"),
-                "description": p.get("descripcion", ""),
+                "id_plato": p.get("id"),
+                "dish_name": p.get("dish_name"),
+                "price": p.get("price"),
+                "description": p.get("description", ""),
                 "is_available": p.get("is_available")
             })
         
@@ -503,12 +370,12 @@ async def get_platos(client_id: str):
 async def create_plato(p: PlatoCreate):
     try:
         sb = get_supabase()
-        # Usar los nombres reales de columnas en Supabase
+        # Mapeo de español (API) a inglés (BD)
         data = {
             "client_id": p.client_id,
-            "nombre": p.nombre,
-            "precio": p.precio,
-            "descripcion": p.descripcion,
+            "dish_name": p.nombre,      # ← nombre -> dish_name
+            "price": p.precio,          # ← precio -> price
+            "description": p.descripcion,  # ← descripcion -> description
             "is_available": p.is_available
         }
         res = sb.table("menu_items").insert(data).execute()
@@ -516,10 +383,10 @@ async def create_plato(p: PlatoCreate):
         if res.data:
             nuevo = res.data[0]
             return {"plato": {
-                "id_plato": nuevo.get("id_plato"),
-                "dish_name": nuevo.get("nombre"),
-                "price": nuevo.get("precio"),
-                "description": nuevo.get("descripcion", "")
+                "id_plato": nuevo.get("id"),
+                "dish_name": nuevo.get("dish_name"),
+                "price": nuevo.get("price"),
+                "description": nuevo.get("description", "")
             }}
         return {"plato": None}
     except Exception as e:
@@ -533,44 +400,31 @@ async def create_plato(p: PlatoCreate):
 async def get_stats():
     try:
         sb = get_supabase()
-        
         restaurantes = sb.table("clients").select("count", count="exact").execute()
         platos = sb.table("menu_items").select("count", count="exact").execute()
-        mensajes = sb.table("messages").select("count", count="exact").execute() if "messages" in dir(sb.table) else {"count": 0}
         
         return {
             "restaurantes": restaurantes.count,
             "platos_totales": platos.count,
-            "mensajes": mensajes.count if hasattr(mensajes, 'count') else 0,
-            "whatsapp_configured": bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID)
+            "whatsapp_configured": bool(WHATSAPP_TOKEN)
         }
     except Exception as e:
-        logger.error(f"[API] get_stats: {e}")
-        return {
-            "restaurantes": 0,
-            "platos_totales": 0,
-            "mensajes": 0,
-            "whatsapp_configured": bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID),
-            "error": str(e)
-        }
+        return {"error": str(e)}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ALIAS EN INGLÉS (Compatibilidad con el formato que esperas)
+# ALIAS EN INGLÉS
 # ──────────────────────────────────────────────────────────────────────────────
 @app.get("/api/clients")
 async def get_clients():
-    """Alias en inglés para /api/restaurantes"""
     return await list_restaurantes()
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
-    """Alias en inglés para /api/platos/{client_id}"""
     return await get_platos(client_id)
 
 @app.post("/api/menu")
 async def create_menu_item(item: dict):
-    """Alias en inglés para crear plato"""
-    # Convertir formato inglés a español
+    """Alias en inglés - convierte a formato español que entiende create_plato"""
     plato = PlatoCreate(
         client_id=item.get("client_id") or item.get("menu_id"),
         nombre=item.get("dish_name") or item.get("nombre"),
@@ -578,10 +432,28 @@ async def create_menu_item(item: dict):
         descripcion=item.get("description", "")
     )
     return await create_plato(plato)
+@app.get("/api/debug/platos")
+async def debug_all_platos():
+    """Endpoint temporal para debug - ver todos los platos"""
+    try:
+        sb = get_supabase()
+        res = sb.table("menu_items").select("*").execute()
+        
+        logger.info(f"[DEBUG] Total platos en BD: {len(res.data)}")
+        
+        # Mostrar primeros 5 para debug
+        for p in res.data[:5]:
+            logger.info(f"[DEBUG] Plato: {p.get('dish_name')} - client_id: {p.get('client_id')}")
+        
+        return {
+            "total": len(res.data),
+            "platos": res.data[:20],  # primeros 20
+            "todos_client_ids": list(set([p.get('client_id') for p in res.data]))
+        }
+    except Exception as e:
+        logger.error(f"[DEBUG] Error: {e}")
+        raise HTTPException(500, detail=str(e))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
