@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Orquestrator ISA — ChatCommerce Bot v2.3 (MINIMAL TESTED)"""
-import os, logging, json
+import os, logging
 from datetime import datetime, timedelta
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -43,7 +43,7 @@ class ClientCreate(BaseModel):
     language: str = Field(default="darija_latin")
     
     class Config:
-        populate_by_name = True
+        populate_by_name = True  # ← Permite usar alias o nombre real
     
     def to_db(self) -> dict:
         return {
@@ -54,69 +54,6 @@ class ClientCreate(BaseModel):
             "trial_ends_at": (datetime.utcnow() + timedelta(days=20)).date().isoformat(),
         }
 
-class MenuItemCreate(BaseModel):
-    client_id: Optional[str] = Field(None, alias="client_id")
-    menu_id: Optional[str] = Field(None, alias="menu_id")
-    dish_name: Optional[str] = Field(None, alias="dish_name")
-    nombre: Optional[str] = Field(None, alias="nombre")
-    price: Optional[int] = Field(None, alias="price")
-    precio: Optional[int] = Field(None, alias="precio")
-    
-    class Config:
-        populate_by_name = True
-    
-    def to_db(self, fallback_id: str) -> dict:
-        return {
-            "client_id": self.menu_id or self.client_id or fallback_id,
-            "dish_name": self.nombre or self.dish_name or "Sin nombre",
-            "price": self.precio or self.price or 0,
-            "is_available": True,
-        }
-
-# ── NLP: Darija Dual ───────────────────────────────────────
-class NLP:
-    DARIJA_LATIN = ["salam", "marhba", "bghit", "chno", "wakha", "kifach", "bzaf"]
-    DARIJA_ARABIC = ["سلام", "مرحبا", "بغيت", "شنو", "واش", "دابا"]
-    
-    @classmethod
-    def detect(cls, text: str) -> str:
-        t = text.lower().strip()
-        if any(c in text for c in ["\u0600","\u0601","\u0602","\u0603"]):
-            return "darija_arabic" if any(k in text for k in cls.DARIJA_ARABIC) else "arabic"
-        if any(k in t for k in cls.DARIJA_LATIN):
-            return "darija_latin"
-        if any(k in t for k in ["bonjour","merci","oui"]): return "french"
-        if any(k in t for k in ["hola","gracias","quiero"]): return "spanish"
-        if any(k in t for k in ["hello","thanks","want"]): return "english"
-        return "darija_latin"
-    
-    @classmethod
-    def reply(cls, lang: str, text: str) -> str:
-        if any(k in text.lower() for k in ["salam","مرحبا","سلام","bonjour","hola","hello"]):
-            return {
-                "darija_arabic": "👋 *سلام! مرحبا بيك*\n🍴 كتب *menu* باش تشوف الماكول",
-                "darija_latin": "👋 *Salam! Marhba bik*\n🍴 Kteb *menu* bach tchouf lmaakoul",
-                "spanish": "👋 *¡Hola! Bienvenido*\n🍴 Escribe *menu* para ver los platos",
-                "french": "👋 *Bonjour! Bienvenue*\n🍴 Tapez *menu* pour voir le menu",
-                "english": "👋 *Hello! Welcome*\n🍴 Type *menu* to see the food",
-            }.get(lang, "👋 *Salam!* Kteb *menu*")
-        return "😅 Ma fhamteksh. Kteb *menu* bach tchouf lmaakoul."
-
-# ── WhatsApp Service ─────────────────────────────────────────────────
-class WA:
-    BASE = f"https://graph.facebook.com/v18.0"
-    @classmethod
-    async def send(cls, to: str, msg: str) -> dict:
-        if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-            return {"error": "Config incompleta"}
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                f"{cls.BASE}/{PHONE_NUMBER_ID}/messages",
-                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"},
-                json={"messaging_product":"whatsapp","to":to,"type":"text","text":{"body":msg}}
-            )
-            return r.json() if r.status_code==200 else {"error":f"{r.status_code}"}
-
 # ── Lifespan ────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -125,9 +62,11 @@ async def lifespan(app: FastAPI):
     logger.info("[STOP] Bot detenido.")
 
 # ── FastAPI App ─────────────────────────────────────────────────────
+# ← NIVEL 0: app = FastAPI(...)
 app = FastAPI(title="Orquestrator ISA", version="2.3.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# ← NIVEL 0: endpoints al mismo nivel que app = FastAPI(...)
 @app.get("/")
 async def root(): return {"status":"ok","service":"Orquestrator ISA","version":"2.3.0"}
 
@@ -155,6 +94,7 @@ async def wb_post(req: Request, bg: BackgroundTasks):
     return JSONResponse({"status":"ok"},200)
 
 async def process_wa(body: dict):
+    # Simplificado para MVP: responde "salam" en Darija
     try:
         if body.get("object")!="whatsapp_business_account": return
         for e in body.get("entry",[]):
@@ -162,11 +102,22 @@ async def process_wa(body: dict):
                 for msg in ch.get("value",{}).get("messages",[]):
                     if msg.get("type")=="text":
                         frm = msg.get("from")
-                        txt = msg.get("text",{}).get("body","")
-                        lang = NLP.detect(txt)
-                        await WA.send(frm, NLP.reply(lang, txt))
+                        txt = msg.get("text",{}).get("body","").lower()
+                        reply = "👋 *Salam! Marhba bik*\nKteb *menu* bach tchouf lmaakoul" if any(k in txt for k in ["salam","مرحبا","سلام"]) else "😅 Ma fhamteksh. Kteb *menu*"
+                        await send_wa(frm, reply)
     except Exception as ex:
         logger.error(f"[WA] Error: {ex}", exc_info=True)
+
+async def send_wa(to: str, msg: str) -> dict:
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        return {"error": "Config incompleta"}
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(
+            f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+            headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"},
+            json={"messaging_product":"whatsapp","to":to,"type":"text","text":{"body":msg}}
+        )
+        return r.json() if r.status_code==200 else {"error":f"{r.status_code}"}
 
 # ── API Endpoints (NIVEL 0 DE INDENTACIÓN) ────────
 
@@ -191,32 +142,6 @@ async def create_client(c: ClientCreate):
     except Exception as e:
         logger.error(f"[API] create_client error: {e}", exc_info=True)
         raise HTTPException(500, detail=f"{str(e)} - Usa name/nombre y owner_phone/telefono")
-
-@app.get("/api/menu/{cid}")
-async def get_menu(cid: str):
-    try:
-        sb = get_supabase()
-        res = sb.table("menu_items").select("*").eq("client_id",cid).eq("is_available",True).execute()
-        return {"items":res.data or [], "count":len(res.data or [])}
-    except Exception as e:
-        raise HTTPException(500, detail=str(e))
-
-@app.post("/api/menu")
-async def create_item(i: MenuItemCreate):
-    try:
-        sb = get_supabase()
-        cid = i.menu_id or i.client_id
-        if not cid:
-            cr = sb.table("clients").select("id").eq("is_active",True).limit(1).execute()
-            if cr.data:
-                cid = cr.data[0]["id"]
-        if not cid:
-            raise HTTPException(400, detail="No client_id found")
-        res = sb.table("menu_items").insert(i.to_db(cid)).execute()
-        return {"item": res.data[0] if res.data else None}
-    except Exception as e:
-        logger.error(f"[API] create_item: {e}", exc_info=True)
-        raise HTTPException(500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
