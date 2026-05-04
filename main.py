@@ -43,6 +43,30 @@ async def create_client(name: str = None, telefono: str = None):
         "data": {"name": name or "Test", "telefono": telefono or "+212600000000"}
     }
 
+@app.get("/api/clients")
+async def clients_alias():
+    """Redirige a /api/restaurantes"""
+    from fastapi.responses import JSONResponse
+    # Reutilizar la función existente
+    return await list_restaurantes()
+
+@app.post("/api/clients")
+async def create_client_alias(client_data: dict):
+    """Redirige a /api/restaurantes"""
+    from fastapi.responses import JSONResponse
+    # Adaptar el formato si es necesario
+    return await create_restaurante(client_data)
+
+@app.get("/api/menu/{client_id}")
+async def menu_alias(client_id: str):
+    """Redirige a /api/platos/{menu_id}"""
+    return await get_platos(client_id)
+
+@app.post("/api/menu")
+async def create_plato_alias(plato_data: dict):
+    """Redirige a /api/platos"""
+    return await create_plato(plato_data
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
