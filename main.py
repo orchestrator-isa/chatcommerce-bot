@@ -386,41 +386,42 @@ async def get_platos(client_id: str):
 
 @app.get("/api/platos/{client_id}")
 async def get_platos(client_id: str):
+    """Obtiene todos los platos de un restaurante"""
     try:
         sb = get_supabase()
         
-        # Intentar diferentes formatos de UUID
-        possible_ids = [client_id]
+        # Limpiar el client_id (quitar espacios, convertir a minúsculas)
+        clean_id = client_id.strip().lower()
         
-        # Si el UUID viene sin guiones, intentar con guiones
-        if '-' not in client_id and len(client_id) == 32:
-            formatted = f"{client_id[:8]}-{client_id[8:12]}-{client_id[12:16]}-{client_id[16:20]}-{client_id[20:]}"
-            possible_ids.append(formatted)
+        logger.info(f"[API] Buscando platos para restaurant: {clean_id}")
         
-        logger.info(f"[API] Buscando platos para: {possible_ids}")
+        # Buscar platos con el client_id exacto
+        response = sb.table("menu_items")\
+            .select("*")\
+            .eq("client_id", clean_id)\
+            .eq("is_available", True)\
+            .execute()
         
-        all_platos = []
-        for cid in possible_ids:
-            res = sb.table("menu_items").select("*").eq("client_id", cid).eq("is_available", True).execute()
-            all_platos.extend(res.data)
-            if res.data:
-                logger.info(f"[API] Encontrados {len(res.data)} platos con {cid}")
-                break
+        logger.info(f"[API] Encontrados {len(response.data)} platos")
         
+        # Formatear la respuesta
         platos = []
-        for p in all_platos:
+        for item in response.data:
             platos.append({
-                "id_plato": p.get("id"),
-                "dish_name": p.get("dish_name"),
-                "price": p.get("price"),
-                "description": p.get("description", ""),
-                "is_available": p.get("is_available")
+                "id_plato": item.get("id"),
+                "nombre": item.get("dish_name"),  # ← mapeo dish_name -> nombre
+                "precio": item.get("price"),       # ← mapeo price -> precio
+                "descripcion": item.get("description", ""),
+                "is_available": item.get("is_available"),
+                "is_star": item.get("is_star", False),
+                "created_at": item.get("created_at")
             })
         
         return {"platos": platos, "count": len(platos)}
+        
     except Exception as e:
-        logger.error(f"[API] get_platos error: {e}", exc_info=True)
-        raise HTTPException(500, detail=str(e))
+        logger.error(f"[API] Error en get_platos: {e}", exc_info=True)
+        raise HTTPException(500, detail=f"Error al obtener platos: {str(e)}")
 
 @app.post("/api/debug/crear_plato_directo")
 async def debug_crear_plato(client_id: str, dish_name: str, price: int):
@@ -452,7 +453,30 @@ async def debug_crear_plato(client_id: str, dish_name: str, price: int):
             "error": str(e),
             "type": type(e).__name__
         }
-
+@app.get("/api/debug/verificar_platos/{client_id}")
+async def verificar_platos(client_id: str):
+    """Verifica si existen platos para un client_id específico"""
+    try:
+        sb = get_supabase()
+        
+        # Verificar si el restaurante existe
+        client_check = sb.table("clients").select("id, name").eq("id", client_id).execute()
+        
+        # Buscar platos
+        platos = sb.table("menu_items").select("*").eq("client_id", client_id).execute()
+        
+        return {
+            "restaurante_existe": len(client_check.data) > 0,
+            "datos_restaurante": client_check.data[0] if client_check.data else None,
+            "total_platos_encontrados": len(platos.data),
+            "platos": platos.data[:5] if platos.data else [],
+            "client_id_buscado": client_id
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "client_id_buscado": client_id
+        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # API ENDPOINTS - ESTADÍSTICAS
