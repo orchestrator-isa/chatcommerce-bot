@@ -384,32 +384,75 @@ async def get_platos(client_id: str):
         logger.error(f"[API] get_platos error: {e}", exc_info=True)
         raise HTTPException(500, detail=str(e))
 
-@app.post("/api/platos")
-async def create_plato(p: PlatoCreate):
+@app.get("/api/platos/{client_id}")
+async def get_platos(client_id: str):
     try:
         sb = get_supabase()
-        # Mapeo de español (API) a inglés (BD)
+        
+        # Intentar diferentes formatos de UUID
+        possible_ids = [client_id]
+        
+        # Si el UUID viene sin guiones, intentar con guiones
+        if '-' not in client_id and len(client_id) == 32:
+            formatted = f"{client_id[:8]}-{client_id[8:12]}-{client_id[12:16]}-{client_id[16:20]}-{client_id[20:]}"
+            possible_ids.append(formatted)
+        
+        logger.info(f"[API] Buscando platos para: {possible_ids}")
+        
+        all_platos = []
+        for cid in possible_ids:
+            res = sb.table("menu_items").select("*").eq("client_id", cid).eq("is_available", True).execute()
+            all_platos.extend(res.data)
+            if res.data:
+                logger.info(f"[API] Encontrados {len(res.data)} platos con {cid}")
+                break
+        
+        platos = []
+        for p in all_platos:
+            platos.append({
+                "id_plato": p.get("id"),
+                "dish_name": p.get("dish_name"),
+                "price": p.get("price"),
+                "description": p.get("description", ""),
+                "is_available": p.get("is_available")
+            })
+        
+        return {"platos": platos, "count": len(platos)}
+    except Exception as e:
+        logger.error(f"[API] get_platos error: {e}", exc_info=True)
+        raise HTTPException(500, detail=str(e))
+
+@app.post("/api/debug/crear_plato_directo")
+async def debug_crear_plato(client_id: str, dish_name: str, price: int):
+    """Endpoint temporal para debug - crear plato con parámetros directos"""
+    try:
+        sb = get_supabase()
+        
+        # Intentar diferentes formatos de columna
         data = {
-            "client_id": p.client_id,
-            "dish_name": p.nombre,      # ← nombre -> dish_name
-            "price": p.precio,          # ← precio -> price
-            "description": p.descripcion,  # ← descripcion -> description
-            "is_available": p.is_available
+            "client_id": client_id,
+            "dish_name": dish_name,
+            "price": price,
+            "description": "Debug creation",
+            "is_available": True
         }
+        
+        logger.info(f"[DEBUG] Insertando: {data}")
         res = sb.table("menu_items").insert(data).execute()
         
-        if res.data:
-            nuevo = res.data[0]
-            return {"plato": {
-                "id_plato": nuevo.get("id"),
-                "dish_name": nuevo.get("dish_name"),
-                "price": nuevo.get("price"),
-                "description": nuevo.get("description", "")
-            }}
-        return {"plato": None}
+        return {
+            "success": True,
+            "data": res.data[0] if res.data else None,
+            "inserted_data": data
+        }
     except Exception as e:
-        logger.error(f"[API] create_plato: {e}")
-        raise HTTPException(500, detail=str(e))
+        logger.error(f"[DEBUG] Error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "type": type(e).__name__
+        }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # API ENDPOINTS - ESTADÍSTICAS
