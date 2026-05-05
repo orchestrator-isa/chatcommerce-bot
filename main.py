@@ -38,3 +38,9 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main_render:app", host="0.0.0.0", port=port)
+
+@app.get("/api/menu/{client_id}")
+async def get_menu(client_id: str):
+    """Alias en inglés para /api/platos/{client_id}"""
+    return await get_platos(client_id)
+
