@@ -25,17 +25,23 @@ async def health():
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
     result = supabase.table("clients").select("*").eq("is_active", True).execute()
     return {"restaurantes": result.data, "count": len(result.data)}
 
 @app.get("/api/platos/{client_id}")
 async def get_platos(client_id: str):
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
     result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
     platos = [{"id_plato": r["id"], "nombre": r["dish_name"], "precio": r["price"]} for r in result.data]
     return {"platos": platos, "count": len(platos)}
 
 @app.post("/api/platos")
 async def create_plato(item: dict):
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
     data = {
         "client_id": item["client_id"],
         "dish_name": item["nombre"],
@@ -44,18 +50,23 @@ async def create_plato(item: dict):
         "is_available": True
     }
     result = supabase.table("menu_items").insert(data).execute()
-    return {"plato": {"id_plato": result.data[0]["id"], "nombre": result.data[0]["dish_name"], "precio": result.data[0]["price"]}}
+    if result.data:
+        nuevo = result.data[0]
+        return {"plato": {"id_plato": nuevo["id"], "nombre": nuevo["dish_name"], "precio": nuevo["price"]}}
+    return {"plato": None}
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
+    """Alias en inglés para /api/platos"""
     return await get_platos(client_id)
 
 @app.post("/api/menu")
 async def create_menu_item(item: dict):
+    """Alias en inglés para crear plato"""
     plato_data = {
         "client_id": item.get("client_id"),
-        "nombre": item.get("dish_name"),
-        "precio": item.get("price"),
+        "nombre": item.get("dish_name") or item.get("nombre"),
+        "precio": item.get("price") or item.get("precio"),
         "descripcion": item.get("description", "")
     }
     return await create_plato(plato_data)
