@@ -14,24 +14,27 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok"}
+    return {"status": "ok", "message": "Render deploy working"}
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "deploy": "2026-05-05"}
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
     return {
-        "message": "Endpoint funciona!",
+        "success": True,
+        "message": f"Endpoint /api/menu funciona!",
         "client_id": client_id,
-        "platos": [
-            {"nombre": "Tajine de Prueba", "precio": 85}
-        ]
+        "data": {
+            "platos": [
+                {"id": 1, "nombre": "Tajine de Prueba", "precio": 85},
+                {"id": 2, "nombre": "Cuscús de Prueba", "precio": 70}
+            ]
+        }
     }
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main_simple:app", host="0.0.0.0", port=port)
-# force deploy Tue May  5 01:16:20 PM +01 2026
+    uvicorn.run("main_render:app", host="0.0.0.0", port=port)
