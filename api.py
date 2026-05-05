@@ -85,5 +85,5 @@ async def create_menu_item(item: dict):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    uvicorn.run("api:app", host="0.0.0.0", port=port)
 # force deploy Tue May  5 02:44:44 PM +01 2026

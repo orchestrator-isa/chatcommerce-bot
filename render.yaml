@@ -2,8 +2,10 @@ services:
   - type: web
     name: chatcommerce-bot
     runtime: python
+    repo: https://github.com/orchestrator-isa/isa_chatcommerce_bot
+    branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: WHATSAPP_TOKEN
         sync: false
@@ -12,8 +14,6 @@ services:
       - key: PHONE_NUMBER_ID
         sync: false
       - key: SUPABASE_URL
-        value: https://ktsgmfxokvheosqpoetr.supabase.co
+        sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: META_API_VERSION
-        value: v18.0
