@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Orquestrator ISA — ChatCommerce Bot v3.1
-Mejoras: Caché de menús, carrito de compras, mapeo por teléfono
+Orquestrator ISA — ChatCommerce Bot v3.2
+Corregido: Tabla 'restaurantes' en lugar de 'clients'
+Darija árabe detectado correctamente
 """
 
 import os
@@ -12,7 +13,6 @@ from supabase import create_client
 from functools import lru_cache
 from typing import Dict, List
 import httpx
-import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -29,24 +29,25 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABAS
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ========== CARITOS DE COMPRA POR USUARIO ==========
+# ========== CARITOS DE COMPRA ==========
 carts: Dict[str, List[dict]] = {}
 
-# ========== MAPEO DE NÚMEROS DE TELÉFONO A RESTAURANTES ==========
+# ========== MAPEO DE TELÉFONOS A RESTAURANTES ==========
 phone_to_restaurant: Dict[str, str] = {}
 
 async def load_phone_mapping():
-    """Carga el mapeo de números de teléfono a IDs de restaurante"""
+    """Carga mapeo de números de teléfono a IDs de restaurante (tabla restaurantes)"""
     global phone_to_restaurant
     try:
         if not supabase:
             return
-        result = supabase.table("clients").select("id, owner_phone").eq("is_active", True).execute()
-        phone_to_restaurant = {
-            r["owner_phone"].replace("+", ""): r["id"]: r["owner_phone"]: r["id"]
-            for r in result.data
-            if r.get("owner_phone")
-        }
+        result = supabase.table("restaurantes").select("id_restaurante, telefono").eq("is_active", True).execute()
+        phone_to_restaurant = {}
+        for r in result.data:
+            telefono = r.get("telefono", "")
+            if telefono:
+                phone_to_restaurant[telefono.replace("+", "")] = r["id_restaurante"]
+                phone_to_restaurant[telefono] = r["id_restaurante"]
         logger.info(f"📞 Mapeo cargado: {len(phone_to_restaurant)} restaurantes")
     except Exception as e:
         logger.error(f"Error cargando mapeo: {e}")
@@ -59,8 +60,8 @@ class LanguageDetector:
         'french': ['bonjour', 'menu', 'merci', 'combien', 'nourriture', 'plat', 'tajine'],
         'german': ['hallo', 'menü', 'danke', 'wie viel', 'essen', 'gericht', 'tajine'],
         'turkish': ['merhaba', 'menü', 'teşekkür', 'ne kadar', 'yemek', 'tajine'],
-        'darija_latin': ['salam', 'menu', 'marhba', 'bghit', 'shhal', 'maakoul', 'tajine'],
-        'darija_arabic': ['سلام', 'قائمة', 'مرحبا', 'بغيت', 'شحال', 'ماكول']
+        'darija_latin': ['salam', 'menu', 'marhba', 'bghit', 'shhal', 'maakoul', 'tajine', 'labas', 'mzyan', 'wakha'],
+        'darija_arabic': ['سلام', 'قائمة', 'مرحبا', 'بغيت', 'شحال', 'ماكول', 'تاجين', 'مزيان', 'واخا', 'لاباس']
     }
     
     WELCOME = {
@@ -85,10 +86,18 @@ class LanguageDetector:
 
     @classmethod
     def detect(cls, text: str) -> str:
+        """Detecta el idioma del mensaje"""
         text_lower = text.lower().strip()
-        if any('\u0600' <= c <= '\u06FF' for c in text):
-            return 'darija_arabic'
         
+        # Detectar árabe (darija_arabic)
+        if any('\u0600' <= c <= '\u06FF' for c in text):
+            # Verificar si tiene palabras clave darija árabe
+            for keyword in cls.KEYWORDS['darija_arabic']:
+                if keyword in text:
+                    return 'darija_arabic'
+            return 'darija_arabic'  # Por defecto árabe si tiene caracteres árabes
+        
+        # Detectar por palabras clave
         scores = {}
         for lang, keywords in cls.KEYWORDS.items():
             score = sum(1 for k in keywords if k in text_lower)
@@ -97,6 +106,7 @@ class LanguageDetector:
         
         if scores:
             return max(scores, key=scores.get)
+        
         return 'spanish'
     
     @classmethod
@@ -110,7 +120,6 @@ class LanguageDetector:
 # ========== CACHÉ DE MENÚS ==========
 @lru_cache(maxsize=100)
 async def get_restaurant_menu_cached(client_id: str) -> str:
-    """Menú con caché para evitar consultas repetidas a Supabase"""
     return await get_restaurant_menu(client_id)
 
 async def get_restaurant_menu(client_id: str) -> str:
@@ -137,12 +146,10 @@ async def get_restaurant_menu(client_id: str) -> str:
         logger.error(f"Error en menú: {e}")
         return "❌ Error al cargar el menú"
 
-# ========== PROCESAMIENTO DE PEDIDOS ==========
+# ========== PEDIDOS ==========
 async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) -> str:
-    """Añade un plato al carrito del usuario"""
     try:
         result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
-        
         if not result.data or item_index > len(result.data):
             return LanguageDetector.get_help(lang)
         
@@ -158,14 +165,12 @@ async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) 
         })
         
         total = sum(item["price"] for item in carts[user_id])
-        
-        return f"✅ *{selected['dish_name']}* añadido al carrito\n💰 Total: {total} dhs\n\nEscribe *PEDIDO* para ver tu carrito o *MENU* para seguir agregando."
+        return f"✅ *{selected['dish_name']}* añadido\n💰 Total: {total} dhs\n\nEscribe *PEDIDO* para ver tu carrito."
     except Exception as e:
-        logger.error(f"Error en carrito: {e}")
-        return "❌ Error al añadir al carrito"
+        logger.error(f"Error carrito: {e}")
+        return "❌ Error al añadir"
 
 async def get_cart(user_id: str, lang: str) -> str:
-    """Muestra el carrito del usuario"""
     if user_id not in carts or not carts[user_id]:
         return "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver los platos."
     
@@ -178,29 +183,24 @@ async def get_cart(user_id: str, lang: str) -> str:
     cart_lines.append("")
     cart_lines.append(f"💰 *TOTAL: {total} dhs*")
     cart_lines.append("")
-    cart_lines.append("✍️ Escribe *CONFIRMAR* para finalizar o *MENU* para seguir agregando.")
+    cart_lines.append("✍️ Escribe *CONFIRMAR* para finalizar.")
     
     return "\n".join(cart_lines)
 
 async def confirm_order(user_id: str, lang: str) -> str:
-    """Confirma el pedido y lo guarda en la base de datos"""
     if user_id not in carts or not carts[user_id]:
-        return "❌ No tienes pedido pendiente. Escribe *MENU* para ver los platos."
+        return "❌ No hay pedido pendiente."
     
-    # Aquí se guardaría el pedido en Supabase (tabla orders)
     total = sum(item["price"] for item in carts[user_id])
-    
-    # Limpiar carrito
     carts.pop(user_id, None)
-    
-    return f"✅ *¡Pedido confirmado!*\n💰 Total: {total} dhs\n\n📋 En breve recibirás tu pedido. ¡Gracias!"
+    return f"✅ *¡Pedido confirmado!*\n💰 Total: {total} dhs\n\n📋 ¡Gracias!"
 
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
 async def webhook_verify(request: Request):
     params = request.query_params
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
-        logger.info(f"Webhook verificado")
+        logger.info("Webhook verificado")
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     raise HTTPException(403, "Verification failed")
 
@@ -215,7 +215,6 @@ async def webhook_post(request: Request, background_tasks: BackgroundTasks):
         return {"status": "error"}
 
 async def process_message(body: dict):
-    """Procesa mensajes de WhatsApp"""
     try:
         if body.get("object") != "whatsapp_business_account":
             return
@@ -226,7 +225,6 @@ async def process_message(body: dict):
                 metadata = value.get("metadata", {})
                 display_phone = metadata.get("display_phone_number", "").replace("+", "")
                 
-                # Identificar restaurante por número de teléfono
                 client_id = phone_to_restaurant.get(display_phone)
                 
                 for msg in value.get("messages", []):
@@ -239,7 +237,6 @@ async def process_message(body: dict):
                         
                         logger.info(f"📨 {user_id} [{lang}]: {text[:50]}")
                         
-                        # Comandos principales
                         if text_lower in ['menu', 'menú']:
                             if client_id:
                                 response = await get_restaurant_menu_cached(client_id)
@@ -259,10 +256,8 @@ async def process_message(body: dict):
                             response = LanguageDetector.get_welcome(lang)
                         
                         elif text_lower.isdigit() and 1 <= int(text_lower) <= 50:
-                            # Selección de plato por número
-                            item_num = int(text_lower)
                             if client_id:
-                                response = await add_to_cart(user_id, item_num, client_id, lang)
+                                response = await add_to_cart(user_id, int(text_lower), client_id, lang)
                             else:
                                 response = LanguageDetector.get_help(lang)
                         
@@ -275,7 +270,6 @@ async def process_message(body: dict):
         logger.error(f"Error procesando: {e}")
 
 async def send_message(to: str, message: str):
-    """Envía mensaje por WhatsApp"""
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WhatsApp no configurado")
         return
@@ -290,13 +284,13 @@ async def send_message(to: str, message: str):
 # ========== API ENDPOINTS ==========
 @app.get("/")
 async def root():
-    return {"status": "ok", "version": "3.1", "features": ["multi-idioma", "carrito", "menú dinámico"]}
+    return {"status": "ok", "version": "3.2"}
 
 @app.get("/health")
 async def health():
     supabase_status = False
     try:
-        supabase.table("clients").select("count", count="exact").limit(1).execute()
+        supabase.table("restaurantes").select("count", count="exact").limit(1).execute()
         supabase_status = True
     except:
         pass
@@ -313,7 +307,7 @@ async def health():
 async def get_restaurantes():
     if not supabase:
         raise HTTPException(500, "Supabase no configurado")
-    result = supabase.table("clients").select("*").eq("is_active", True).execute()
+    result = supabase.table("restaurantes").select("*").eq("is_active", True).execute()
     return {"restaurantes": result.data, "count": len(result.data)}
 
 @app.get("/api/platos/{client_id}")
@@ -344,18 +338,6 @@ async def create_plato(item: dict):
 async def get_menu(client_id: str):
     return await get_platos(client_id)
 
-@app.get("/api/cart/{user_id}")
-async def view_cart(user_id: str, lang: str = "spanish"):
-    """Endpoint para ver carrito (debug)"""
-    return {"cart": carts.get(user_id, []), "total": sum(i["price"] for i in carts.get(user_id, []))}
-
-@app.post("/api/cart/{user_id}/clear")
-async def clear_cart(user_id: str):
-    """Limpiar carrito (debug)"""
-    carts.pop(user_id, None)
-    return {"status": "cleared"}
-
-# ========== CARGA INICIAL ==========
 @app.on_event("startup")
 async def startup():
     logger.info("🚀 Bot iniciando...")
