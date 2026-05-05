@@ -46,7 +46,6 @@ async def create_plato(item: dict):
     result = supabase.table("menu_items").insert(data).execute()
     return {"plato": {"id_plato": result.data[0]["id"], "nombre": result.data[0]["dish_name"], "precio": result.data[0]["price"]}}
 
-# Endpoint que necesitas
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
     return await get_platos(client_id)
