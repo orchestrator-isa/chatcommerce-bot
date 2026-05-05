@@ -112,17 +112,28 @@ async def webhook_post(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"Error: {e}")
         return {"status": "error"}
 
-async def get_restaurant_menu(client_id: str) -> str:
+async def get_restaurant_menu(client_id: str = None) -> str:
     """Obtiene el menú del restaurante desde Supabase"""
     try:
         if not supabase:
             return "❌ Error de conexión con la base de datos"
         
+        # Si no hay client_id, usar el de Cafe Al Hizam Al Akhdar (demo)
+        if not client_id:
+            # Buscar el primer restaurante activo
+            result = supabase.table("clients").select("id").eq("is_active", True).limit(1).execute()
+            if result.data:
+                client_id = result.data[0]["id"]
+            else:
+                return "📋 No hay restaurantes configurados"
+        
+        # Obtener platos del restaurante
         result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
         
         if not result.data:
-            return "📋 *Menú*\nNo hay platos disponibles en este momento."
+            return "📋 *MENÚ*\nNo hay platos disponibles en este momento."
         
+        # Formatear menú
         menu_lines = ["📋 *MENÚ*", ""]
         for item in result.data:
             menu_lines.append(f"🍽️ *{item['dish_name']}*")
@@ -135,6 +146,8 @@ async def get_restaurant_menu(client_id: str) -> str:
     except Exception as e:
         logger.error(f"Error obteniendo menú: {e}")
         return "❌ Error al cargar el menú. Intenta más tarde."
+
+
 
 async def process_message(body: dict):
     """Procesa mensajes de WhatsApp con detección de idioma"""
