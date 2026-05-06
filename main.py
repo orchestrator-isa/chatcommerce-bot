@@ -7,6 +7,8 @@ from supabase import create_client
 from functools import lru_cache
 from typing import Dict, List
 import httpx
+VERSION = "3.2-LanguageDetector"
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -275,6 +277,9 @@ async def startup():
     logger.info("🚀 Bot iniciando...")
     await load_phone_mapping()
     logger.info(f"✅ Listo. {len(phone_to_restaurant)} restaurantes mapeados")
+@app.get("/api/version")
+async def version():
+    return {"version": "3.2", "has_language_detector": True}
 
 if __name__ == "__main__":
     import uvicorn
