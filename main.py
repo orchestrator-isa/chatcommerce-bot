@@ -1,6 +1,3 @@
-cd ~/Documents/isa_chatcommerce_bot
-
-cat > main.py << 'EOF'
 #!/usr/bin/env python3
 import os
 import logging
@@ -283,4 +280,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-EOF
