@@ -28,6 +28,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # ========== CARITOS ==========
 carts: Dict[str, List[dict]] = {}
 
+# ========== MEMORIA DE IDIOMA POR SESION ==========
+user_lang: Dict[str, str] = {}
+
 # ========== MAPEO DE TELÉFONOS ==========
 phone_to_restaurant: Dict[str, str] = {}
 
@@ -125,6 +128,46 @@ async def get_restaurant_menu(client_id: str) -> str:
         return "❌ Error al cargar el menú"
 
 # ========== PEDIDOS ==========
+CART_ADDED = {
+    'spanish':      lambda name, total: f"✅ *{name}* añadido al pedido.\n💰 Total: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito o sigue añadiendo.",
+    'english':      lambda name, total: f"✅ *{name}* added to order.\n💰 Total: {total} MAD\n\nType *PEDIDO* to see your cart.",
+    'french':       lambda name, total: f"✅ *{name}* ajouté au panier.\n💰 Total: {total} MAD\n\nTapez *PEDIDO* pour voir votre panier.",
+    'german':       lambda name, total: f"✅ *{name}* zum Warenkorb hinzugefügt.\n💰 Total: {total} MAD\n\nTippen Sie *PEDIDO* um den Warenkorb zu sehen.",
+    'turkish':      lambda name, total: f"✅ *{name}* sepete eklendi.\n💰 Toplam: {total} MAD\n\nSepeti görmek için *PEDIDO* yazın.",
+    'darija_latin': lambda name, total: f"✅ *{name}* tzad f talab.\n💰 Total: {total} MAD\n\nKteb *PEDIDO* bach tchouf talab kamil.",
+    'darija_arabic':lambda name, total: f"✅ *{name}* زيد ف الطلب.\n💰 المجموع: {total} درهم\n\nاكتب *PEDIDO* باش تشوف الطلب.",
+}
+
+CART_EMPTY = {
+    'spanish':      "🛒 Tu carrito está vacío.\n\nEscribe *MENU* para ver los platos.",
+    'english':      "🛒 Your cart is empty.\n\nType *MENU* to see the dishes.",
+    'french':       "🛒 Votre panier est vide.\n\nTapez *MENU* pour voir les plats.",
+    'german':       "🛒 Ihr Warenkorb ist leer.\n\nTippen Sie *MENU* für die Speisekarte.",
+    'turkish':      "🛒 Sepetiniz boş.\n\nYemekler için *MENU* yazın.",
+    'darija_latin': "🛒 Ma kaynsh haja f talab.\n\nKteb *MENU* bach tchouf lmaakoul.",
+    'darija_arabic':"🛒 ما كاينش حاجة ف الطلب.\n\nاكتب *MENU* باش تشوف الماكولات.",
+}
+
+CART_CONFIRM_PROMPT = {
+    'spanish':      lambda total: f"💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar tu pedido.",
+    'english':      lambda total: f"💰 *TOTAL: {total} MAD*\n\nType *CONFIRMAR* to finish your order.",
+    'french':       lambda total: f"💰 *TOTAL: {total} MAD*\n\nTapez *CONFIRMAR* pour finaliser votre commande.",
+    'german':       lambda total: f"💰 *GESAMT: {total} MAD*\n\nTippen Sie *CONFIRMAR* um Ihre Bestellung abzuschließen.",
+    'turkish':      lambda total: f"💰 *TOPLAM: {total} MAD*\n\nSiparişi tamamlamak için *CONFIRMAR* yazın.",
+    'darija_latin': lambda total: f"💰 *TOTAL: {total} MAD*\n\nKteb *CONFIRMAR* bach tkmml talab.",
+    'darija_arabic':lambda total: f"💰 *المجموع: {total} درهم*\n\nاكتب *CONFIRMAR* باش تكمل الطلب.",
+}
+
+CONFIRM_OK = {
+    'spanish':      lambda total: f"✅ *¡Pedido confirmado!*\n💰 Total: {total} MAD\n\n¡Gracias! Nos pondremos en contacto pronto. 🙏",
+    'english':      lambda total: f"✅ *Order confirmed!*\n💰 Total: {total} MAD\n\nThank you! We'll contact you soon. 🙏",
+    'french':       lambda total: f"✅ *Commande confirmée!*\n💰 Total: {total} MAD\n\nMerci! Nous vous contacterons bientôt. 🙏",
+    'german':       lambda total: f"✅ *Bestellung bestätigt!*\n💰 Gesamt: {total} MAD\n\nDanke! Wir melden uns bald. 🙏",
+    'turkish':      lambda total: f"✅ *Sipariş onaylandı!*\n💰 Toplam: {total} MAD\n\nTeşekkürler! Yakında iletişime geçeceğiz. 🙏",
+    'darija_latin': lambda total: f"✅ *Talab mqboul!*\n💰 Total: {total} MAD\n\nShukran! Ghadi nتواصلو m3ak qrib. 🙏",
+    'darija_arabic':lambda total: f"✅ *الطلب مقبول!*\n💰 المجموع: {total} درهم\n\nشكرا! غادي نتواصلو معك قريب. 🙏",
+}
+
 async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) -> str:
     try:
         result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
@@ -135,28 +178,32 @@ async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) 
             carts[user_id] = []
         carts[user_id].append({"id": selected["id"], "name": selected["dish_name"], "price": selected["price"]})
         total = sum(item["price"] for item in carts[user_id])
-        return f"✅ *{selected['dish_name']}* añadido\n💰 Total: {total} dhs\n\nEscribe *PEDIDO* para ver tu carrito."
+        template = CART_ADDED.get(lang, CART_ADDED['spanish'])
+        return template(selected['dish_name'], total)
     except Exception as e:
         logger.error(f"Error carrito: {e}")
         return "❌ Error al añadir"
 
 async def get_cart(user_id: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
-        return "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver los platos."
+        return CART_EMPTY.get(lang, CART_EMPTY['spanish'])
     items = carts[user_id]
     total = sum(item["price"] for item in items)
-    cart_lines = ["🛒 *MI PEDIDO*", ""]
+    cart_lines = ["🛒 *PEDIDO*", ""]
     for i, item in enumerate(items, 1):
-        cart_lines.append(f"{i}. {item['name']} — {item['price']} dhs")
-    cart_lines.extend(["", f"💰 *TOTAL: {total} dhs*", "", "✍️ Escribe *CONFIRMAR* para finalizar."])
+        cart_lines.append(f"{i}. {item['name']} — {item['price']} MAD")
+    cart_lines.append("")
+    template = CART_CONFIRM_PROMPT.get(lang, CART_CONFIRM_PROMPT['spanish'])
+    cart_lines.append(template(total))
     return "\n".join(cart_lines)
 
 async def confirm_order(user_id: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
-        return "❌ No hay pedido pendiente."
+        return CART_EMPTY.get(lang, CART_EMPTY['spanish'])
     total = sum(item["price"] for item in carts[user_id])
     carts.pop(user_id, None)
-    return f"✅ *¡Pedido confirmado!*\n💰 Total: {total} dhs\n\n📋 ¡Gracias!"
+    template = CONFIRM_OK.get(lang, CONFIRM_OK['spanish'])
+    return template(total)
 
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
@@ -192,6 +239,12 @@ async def process_message(body: dict):
                         user_id = msg.get("from")
                         text = msg.get("text", {}).get("body", "")
                         lang = LanguageDetector.detect(text)
+                        # Guardar idioma detectado en sesion (solo si no es numero)
+                        if not text_lower.isdigit():
+                            user_lang[user_id] = lang
+                        else:
+                            # Para numeros, usar el idioma de la sesion anterior
+                            lang = user_lang.get(user_id, 'spanish')
                         text_lower = text.lower().strip()
                         logger.info(f"📨 {user_id} [{lang}]: {text[:50]}")
                         if text_lower in ['menu', 'menú']:
