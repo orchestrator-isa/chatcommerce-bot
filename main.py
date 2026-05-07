@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import logging
+import re
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client
@@ -8,7 +9,7 @@ from functools import lru_cache
 from typing import Dict, List
 import httpx
 
-VERSION = "3.3-FINAL"
+VERSION = "3.4-MULTI-CANTIDAD"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -25,7 +26,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABAS
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ========== CARITOS E IDIOMAS POR USUARIO ==========
+# ========== CARITOS E IDIOMAS ==========
 carts: Dict[str, List[dict]] = {}
 user_lang: Dict[str, str] = {}
 
@@ -71,13 +72,10 @@ class LanguageDetector:
     }
     
     HELP = {
-        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *PEDIDO* - Mi pedido\n• *CONFIRMAR* - Finalizar',
-        'english': '📋 *Commands*\n• *MENU* - View menu\n• *NUMBER* - Add dish\n• *ORDER* - My order\n• *CONFIRM* - Finish',
-        'french': '📋 *Commandes*\n• *MENU* - Voir le menu\n• *NUMÉRO* - Ajouter un plat\n• *COMMANDE* - Ma commande\n• *CONFIRMER* - Finaliser',
-        'german': '📋 *Befehle*\n• *MENU* - Speisekarte\n• *NUMMER* - Gericht hinzufügen\n• *BESTELLUNG* - Meine Bestellung\n• *BESTÄTIGEN* - Abschließen',
-        'turkish': '📋 *Komutlar*\n• *MENU* - Menüyü gör\n• *NUMARA* - Yemek ekle\n• *SİPARİŞ* - Siparişim\n• *ONAYLA* - Bitir',
-        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *TALAB* - Talabi\n• *T2KID* - Kmmel',
-        'darija_arabic': '📋 *أوامر*\n• *MENU* - شوف الماكولات\n• *رقم* - زيد فلاكلا\n• *طلب* - طلبي\n• *تأكيد* - كمل'
+        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: "3 coca"\n• *PEDIDO* - Mi pedido\n• *CONFIRMAR* - Finalizar',
+        'english': '📋 *Commands*\n• *MENU* - View menu\n• *NUMBER* - Add dish\n• *QUANTITY* - Eg: "3 coke"\n• *ORDER* - My order\n• *CONFIRM* - Finish',
+        'french': '📋 *Commandes*\n• *MENU* - Voir le menu\n• *NUMÉRO* - Ajouter\n• *QUANTITÉ* - Eg: "3 coca"\n• *COMMANDE* - Ma commande\n• *CONFIRMER* - Finaliser',
+        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan "3 coca"\n• *TALAB* - Talabi\n• *T2KID* - Kmmel'
     }
 
     @classmethod
@@ -97,6 +95,34 @@ class LanguageDetector:
     @classmethod
     def get_help(cls, lang: str) -> str:
         return cls.HELP.get(lang, cls.HELP['spanish'])
+
+# ========== PROCESAMIENTO DE CANTIDADES ==========
+def parse_quantity(text: str, platos: List[dict]) -> tuple:
+    """
+    Parsea mensajes como "10 cocacolas" o "3 tajine"
+    Retorna (plato_index, cantidad) o (None, None)
+    """
+    text_lower = text.lower().strip()
+    
+    # Buscar patrón: número + palabra
+    match = re.match(r'(\d+)\s+(.+)', text_lower)
+    if not match:
+        return None, None
+    
+    cantidad = int(match.group(1))
+    nombre_busqueda = match.group(2).strip()
+    
+    # Buscar plato por nombre (coincidencia parcial)
+    for i, plato in enumerate(platos, 1):
+        plato_nombre = plato['dish_name'].lower()
+        # Quitar emojis y caracteres especiales
+        plato_nombre_clean = re.sub(r'[^\w\s]', '', plato_nombre)
+        nombre_busqueda_clean = re.sub(r'[^\w\s]', '', nombre_busqueda)
+        
+        if nombre_busqueda_clean in plato_nombre_clean or plato_nombre_clean in nombre_busqueda_clean:
+            return i, cantidad
+    
+    return None, None
 
 # ========== MENÚ ==========
 @lru_cache(maxsize=100)
@@ -123,57 +149,42 @@ async def get_restaurant_menu(client_id: str) -> tuple:
 
 # ========== PEDIDOS MULTILINGÜE ==========
 CART_ADDED = {
-    'spanish': lambda name, total: f"✅ *{name}* añadido a tu pedido.\n💰 Total parcial: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito.",
-    'english': lambda name, total: f"✅ *{name}* added to your order.\n💰 Subtotal: {total} MAD\n\nType *ORDER* to see your cart.",
-    'french': lambda name, total: f"✅ *{name}* ajouté à votre commande.\n💰 Sous-total: {total} MAD\n\nTapez *COMMANDE* pour voir votre panier.",
-    'german': lambda name, total: f"✅ *{name}* zu Ihrer Bestellung hinzugefügt.\n💰 Zwischensumme: {total} MAD\n\nTippen Sie *BESTELLUNG* um den Warenkorb zu sehen.",
-    'turkish': lambda name, total: f"✅ *{name}* siparişinize eklendi.\n💰 Ara toplam: {total} MAD\n\nSiparişinizi görmek için *SİPARİŞ* yazın.",
-    'darija_latin': lambda name, total: f"✅ *{name}* tzad f talab dialk.\n💰 Total: {total} MAD\n\nKteb *TALAB* bach tchouf talab kamil.",
-    'darija_arabic': lambda name, total: f"✅ *{name}* تزاد ف الطلب ديالك.\n💰 المجموع: {total} درهم\n\nاكتب *طلب* باش تشوف الطلب كامل.",
+    'spanish': lambda name, cantidad, total: f"✅ *{cantidad} x {name}* añadido a tu pedido.\n💰 Total parcial: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito.",
+    'darija_latin': lambda name, cantidad, total: f"✅ *{cantidad} x {name}* tzad f talab dialk.\n💰 Total: {total} MAD\n\nKteb *TALAB* bach tchouf talab kamil.",
 }
 
 CART_VIEW = {
     'spanish': lambda items, total: f"🛒 *TU PEDIDO*\n\n{items}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar.",
-    'english': lambda items, total: f"🛒 *YOUR ORDER*\n\n{items}\n\n💰 *TOTAL: {total} MAD*\n\nType *CONFIRMAR* to finish.",
-    'french': lambda items, total: f"🛒 *VOTRE COMMANDE*\n\n{items}\n\n💰 *TOTAL: {total} MAD*\n\nTapez *CONFIRMAR* pour finaliser.",
-    'german': lambda items, total: f"🛒 *IHRE BESTELLUNG*\n\n{items}\n\n💰 *GESAMT: {total} MAD*\n\nTippen Sie *CONFIRMAR* um abzuschließen.",
-    'turkish': lambda items, total: f"🛒 *SİPARİŞİNİZ*\n\n{items}\n\n💰 *TOPLAM: {total} MAD*\n\nTamamlamak için *CONFIRMAR* yazın.",
     'darija_latin': lambda items, total: f"🛒 *TALAB DIALK*\n\n{items}\n\n💰 *TOTAL: {total} MAD*\n\nKteb *CONFIRMAR* bach tkmml.",
-    'darija_arabic': lambda items, total: f"🛒 *طلب ديالك*\n\n{items}\n\n💰 *المجموع: {total} درهم*\n\nاكتب *CONFIRMAR* باش تكمل.",
 }
 
 CART_EMPTY = {
     'spanish': "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver nuestros platos.",
-    'english': "🛒 *Empty cart*\n\nType *MENU* to see our dishes.",
-    'french': "🛒 *Panier vide*\n\nTapez *MENU* pour voir nos plats.",
-    'german': "🛒 *Leerer Warenkorb*\n\nTippen Sie *MENU* für unsere Gerichte.",
-    'turkish': "🛒 *Boş sepet*\n\nYemeklerimiz için *MENU* yazın.",
     'darija_latin': "🛒 *Talab khawi*\n\nKteb *MENU* bach tchouf lmaakoulat.",
-    'darija_arabic': "🛒 *طلب خاوي*\n\nاكتب *MENU* باش تشوف الماكولات.",
 }
 
 CONFIRM_OK = {
     'spanish': lambda total: f"✅ *¡PEDIDO CONFIRMADO!*\n💰 Total: {total} MAD\n\n📋 Tu pedido ha sido enviado a la cocina.\n⏱️ Tiempo estimado: 20-30 minutos.\n\n¡Gracias por tu compra! 🙏",
-    'english': lambda total: f"✅ *ORDER CONFIRMED!*\n💰 Total: {total} MAD\n\n📋 Your order has been sent to the kitchen.\n⏱️ Estimated time: 20-30 minutes.\n\nThank you for your purchase! 🙏",
-    'french': lambda total: f"✅ *COMMANDE CONFIRMÉE!*\n💰 Total: {total} MAD\n\n📋 Votre commande a été envoyée à la cuisine.\n⏱️ Temps estimé: 20-30 minutes.\n\nMerci pour votre achat! 🙏",
-    'german': lambda total: f"✅ *BESTELLUNG BESTÄTIGT!*\n💰 Gesamt: {total} MAD\n\n📋 Ihre Bestellung wurde an die Küche gesendet.\n⏱️ Geschätzte Zeit: 20-30 Minuten.\n\nDanke für Ihren Einkauf! 🙏",
-    'turkish': lambda total: f"✅ *SİPARİŞ ONAYLANDI!*\n💰 Toplam: {total} MAD\n\n📋 Siparişiniz mutfağa gönderildi.\n⏱️ Tahmini süre: 20-30 dakika.\n\nAlışverişiniz için teşekkürler! 🙏",
     'darija_latin': lambda total: f"✅ *TALAB MQBOUL!*\n💰 Total: {total} MAD\n\n📋 Talab dialk terseel l matbakh.\n⏱️ Wa9t mo9adar: 20-30 dqiqa.\n\nShukran bzaf! 🙏",
-    'darija_arabic': lambda total: f"✅ *الطلب مقبول!*\n💰 المجموع: {total} درهم\n\n📋 طلب ديالك ترسل للمطبخ.\n⏱️ الوقت المقدر: 20-30 دقيقة.\n\nشكرا بزاف! 🙏",
 }
 
-async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) -> str:
+async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: str, lang: str) -> str:
     try:
         _, platos = await get_restaurant_menu(client_id)
         if not platos or item_index > len(platos):
             return LanguageDetector.get_help(lang)
         selected = platos[item_index - 1]
+        
         if user_id not in carts:
             carts[user_id] = []
-        carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
+        
+        # Añadir cantidad veces
+        for _ in range(cantidad):
+            carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
+        
         total = sum(item["price"] for item in carts[user_id])
         template = CART_ADDED.get(lang, CART_ADDED['spanish'])
-        return template(selected['dish_name'], total)
+        return template(selected['dish_name'], cantidad, total)
     except Exception as e:
         logger.error(f"Error carrito: {e}")
         return "❌ Error al añadir"
@@ -181,20 +192,24 @@ async def add_to_cart(user_id: str, item_index: int, client_id: str, lang: str) 
 async def get_cart(user_id: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
         return CART_EMPTY.get(lang, CART_EMPTY['spanish'])
-    items = carts[user_id]
-    total = sum(item["price"] for item in items)
-    # Construir lista de items
-    item_lines = []
-    count = {}
-    for item in items:
+    
+    # Agrupar por nombre
+    items_dict = {}
+    for item in carts[user_id]:
         name = item["name"]
-        count[name] = count.get(name, 0) + 1
-    for name, qty in count.items():
-        price = next(i["price"] for i in items if i["name"] == name)
-        if qty > 1:
-            item_lines.append(f"• {name} x{qty} — {qty * price} MAD")
+        if name not in items_dict:
+            items_dict[name] = {"price": item["price"], "cantidad": 0}
+        items_dict[name]["cantidad"] += 1
+    
+    total = sum(item["price"] for item in carts[user_id])
+    
+    item_lines = []
+    for name, data in items_dict.items():
+        if data["cantidad"] > 1:
+            item_lines.append(f"• {name} x{data['cantidad']} — {data['cantidad'] * data['price']} MAD")
         else:
-            item_lines.append(f"• {name} — {price} MAD")
+            item_lines.append(f"• {name} — {data['price']} MAD")
+    
     items_text = "\n".join(item_lines)
     template = CART_VIEW.get(lang, CART_VIEW['spanish'])
     return template(items_text, total)
@@ -243,42 +258,44 @@ async def process_message(body: dict):
                         text = msg.get("text", {}).get("body", "")
                         text_lower = text.lower().strip()
                         
-                        # Detectar y guardar idioma para saludos
-                        if text_lower in ['hola', 'hello', 'bonjour', 'hallo', 'merhaba', 'salam', 'سلام']:
-                            lang = LanguageDetector.detect(text)
-                            user_lang[user_id] = lang
-                            # 🔧 LIMPIAR CARRITO AL SALUDAR
+                        # Detectar y guardar idioma
+                        lang = LanguageDetector.detect(text)
+                        user_lang[user_id] = lang
+                        
+                        logger.info(f"📨 {user_id} [{lang}]: {text[:50]}")
+                        
+                        # ========== LIMPIEZA DE CARRITO (hola O salam) ==========
+                        if text_lower in ['hola', 'salam', 'hello', 'bonjour', 'hallo', 'merhaba', 'سلام']:
                             if user_id in carts:
                                 del carts[user_id]
                                 logger.info(f"🗑️ Carrito limpiado para {user_id} (nueva sesión)")
                             response = LanguageDetector.get_welcome(lang)
                         
                         elif text_lower in ['menu', 'menú']:
-                            lang = user_lang.get(user_id, 'spanish')
                             menu_text, _ = await get_restaurant_menu(client_id)
                             response = menu_text
                         
-                        elif text_lower.isdigit():
-                            # Usar el idioma guardado del usuario
-                            lang = user_lang.get(user_id, 'spanish')
-                            item_num = int(text_lower)
-                            response = await add_to_cart(user_id, item_num, client_id, lang)
-                        
-                        elif text_lower in ['pedido', 'order', 'commande', 'bestellung', 'sipariş', 'طلب']:
-                            lang = user_lang.get(user_id, 'spanish')
+                        elif text_lower in ['pedido', 'order', 'commande', 'bestellung', 'sipariş', 'طلب', 'talab']:
                             response = await get_cart(user_id, lang)
                         
                         elif text_lower in ['confirmar', 'confirm', 'confirmer', 'bestätigen', 'onayla', 'تأكيد']:
-                            lang = user_lang.get(user_id, 'spanish')
                             response = await confirm_order(user_id, lang)
                         
                         elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardım', 'مساعدة']:
-                            lang = user_lang.get(user_id, 'spanish')
                             response = LanguageDetector.get_help(lang)
                         
+                        elif text_lower.isdigit():
+                            item_num = int(text_lower)
+                            response = await add_to_cart(user_id, item_num, 1, client_id, lang)
+                        
                         else:
-                            lang = user_lang.get(user_id, 'spanish')
-                            response = LanguageDetector.get_help(lang)
+                            # Intentar parsear cantidad (ej: "10 cocacolas")
+                            _, platos = await get_restaurant_menu(client_id)
+                            item_num, cantidad = parse_quantity(text, platos)
+                            if item_num and cantidad:
+                                response = await add_to_cart(user_id, item_num, cantidad, client_id, lang)
+                            else:
+                                response = LanguageDetector.get_help(lang)
                         
                         await send_message(user_id, response)
                         
@@ -293,9 +310,7 @@ async def send_message(to: str, message: str):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message[:1600]}}
     async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=data)
-        if response.status_code != 200:
-            logger.error(f"Error WhatsApp: {response.text}")
+        await client.post(url, headers=headers, json=data)
 
 # ========== API ENDPOINTS ==========
 @app.get("/")
@@ -318,6 +333,10 @@ async def health():
         "carts_active": len(carts),
         "languages_saved": len(user_lang)
     }
+
+@app.get("/api/version")
+async def version():
+    return {"version": VERSION, "features": ["MultiIdioma", "CantidadesMultiples", "CarritoAgrupado", "LimpiezaConSalam"]}
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
@@ -347,20 +366,12 @@ async def create_plato(item: dict):
     }
     result = supabase.table("menu_items").insert(data).execute()
     if result.data:
-        return {"plato": {
-            "id_plato": result.data[0]["id"],
-            "nombre": result.data[0]["dish_name"],
-            "precio": result.data[0]["price"]
-        }}
+        return {"plato": {"id_plato": result.data[0]["id"], "nombre": result.data[0]["dish_name"], "precio": result.data[0]["price"]}}
     return {"plato": None}
 
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
     return await get_platos(client_id)
-
-@app.get("/api/version")
-async def version():
-    return {"version": VERSION, "features": ["LanguageDetector", "CartCleanup", "MultiLanguage", "SpanishCommands"]}
 
 @app.on_event("startup")
 async def startup():
