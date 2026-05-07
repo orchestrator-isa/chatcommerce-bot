@@ -287,7 +287,6 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
     else:
         return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
 
-
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     text_lower = text.lower().strip()
     
