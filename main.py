@@ -271,27 +271,56 @@ async def process_remove_command(user_id: str, text: str, lang: str) -> str:
 
 # ========== PROCESAR CANTIDAD (ej: "6 harira") ==========
 def parse_quantity_command(text: str, platos: List[dict]) -> tuple:
-    """Parsea comandos como '6 harira' -> (item_index, cantidad)"""
+    """Parsea comandos como '2 te a la menta' o '3 cocas' (AHORA FUNCIONA)"""
     text_lower = text.lower().strip()
-    match = re.match(r'(\d+)\s+(.+)', text_lower)
+    
+    # Patrón: número + algo (mínimo 2 caracteres después del número)
+    match = re.match(r'(\d+)\s+([a-záéíóúñü]{2,}(?:\s+[a-záéíóúñü]{2,})*)', text_lower)
     if not match:
         return None, None
     
     cantidad = int(match.group(1))
     nombre_buscar = match.group(2).strip()
     
-    # Buscar por nombre (coincidencia parcial)
+    # Normalizar: eliminar acentos y caracteres especiales
+    import unicodedata
+    nombre_buscar = unicodedata.normalize('NFKD', nombre_buscar).encode('ASCII', 'ignore').decode('ASCII')
+    
+    mejor_coincidencia = None
+    mejor_puntaje = 0
+    
     for i, plato in enumerate(platos, 1):
         nombre_plato = plato['dish_name'].lower()
-        # Limpiar emojis y caracteres especiales
+        nombre_plato = unicodedata.normalize('NFKD', nombre_plato).encode('ASCII', 'ignore').decode('ASCII')
+        # Eliminar emojis
         nombre_plato_clean = re.sub(r'[^\w\s]', '', nombre_plato)
-        nombre_buscar_clean = re.sub(r'[^\w\s]', '', nombre_buscar)
         
-        if nombre_buscar_clean in nombre_plato_clean or nombre_plato_clean in nombre_buscar_clean:
+        # Coincidencia exacta (ej: "coca" vs "coca-cola" -> sí pero con menor puntaje)
+        if nombre_buscar == nombre_plato_clean:
             return i, cantidad
+        
+        # Coincidencia donde el nombre buscado está al inicio o es palabra completa
+        palabras_buscar = set(nombre_buscar.split())
+        palabras_plato = set(nombre_plato_clean.split())
+        
+        # Si todas las palabras buscadas están en el nombre del plato
+        if palabras_buscar.issubset(palabras_plato):
+            puntaje = len(palabras_buscar)
+            if puntaje > mejor_puntaje:
+                mejor_puntaje = puntaje
+                mejor_coincidencia = i
+        
+        # Coincidencia parcial simple (solo si es larga)
+        if len(nombre_buscar) >= 3 and nombre_buscar in nombre_plato_clean:
+            puntaje = len(nombre_buscar)
+            if puntaje > mejor_puntaje:
+                mejor_puntaje = puntaje
+                mejor_coincidencia = i
+    
+    if mejor_coincidencia and mejor_puntaje >= 1:
+        return mejor_coincidencia, cantidad
     
     return None, None
-
 # ========== FASES DE ENTREGA Y PAGO ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
     pedido_estado[user_id] = {"fase": "entrega"}
