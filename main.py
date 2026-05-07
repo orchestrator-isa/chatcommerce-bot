@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "4.0-DIAGRAMA-COMPLETO"
+VERSION = "4.1-ELIMINAR-NATURAL"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -26,10 +26,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABAS
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ========== CARITOS Y ESTADOS DE PEDIDO ==========
+# ========== CARITOS Y ESTADOS ==========
 carts: Dict[str, List[dict]] = {}
 user_lang: Dict[str, str] = {}
-pedido_estado: Dict[str, dict] = {}  # Guarda tipo_entrega, direccion, metodo_pago
+pedido_estado: Dict[str, dict] = {}
 
 # ========== MAPEO DE TELÉFONOS ==========
 phone_to_restaurant: Dict[str, str] = {}
@@ -73,8 +73,8 @@ class LanguageDetector:
     }
     
     HELP = {
-        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *ELIMINAR TODO* - Vaciar carrito\n• *CONFIRMAR* - Finalizar pedido\n• *HOLA* - Limpiar y reiniciar',
-        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *TALAB* - Chouf talab\n• *ELIMINAR X* - Hedi flakla\n• *ELIMINAR TODO* - Fergi talab\n• *CONFIRMAR* - Kmml talab'
+        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: "3 coca"\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato (por nº o nombre)\n• *ELIMINAR TODO* - Vaciar carrito\n• *CONFIRMAR* - Finalizar',
+        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan "3 coca"\n• *TALAB* - Chouf talab\n• *ELIMINAR X* - Hedi flakla (b raqm wlla b smiya)\n• *ELIMINAR TODO* - Fergi talab\n• *CONFIRMAR* - Kmml talab'
     }
 
     @classmethod
@@ -142,28 +142,52 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
         logger.error(f"Error carrito: {e}")
         return "❌ Error al añadir"
 
-async def remove_from_cart(user_id: str, item_index: int, lang: str) -> str:
-    """Elimina un plato específico del carrito"""
-    try:
-        if user_id not in carts or not carts[user_id]:
-            return "🛒 No hay nada en tu carrito."
-        
-        if item_index < 1 or item_index > len(carts[user_id]):
-            return f"❌ Número inválido. El carrito tiene {len(carts[user_id])} platos."
-        
-        removed = carts[user_id].pop(item_index - 1)
-        total = sum(item["price"] for item in carts[user_id])
-        
-        if lang == 'spanish':
-            return f"✅ *{removed['name']}* eliminado del carrito.\n💰 Total actual: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) -> str:
+    """Elimina platos por nombre (coincidencia parcial)"""
+    if user_id not in carts or not carts[user_id]:
+        return "🛒 No hay nada en tu carrito."
+    
+    nombre_buscar_lower = nombre_buscar.lower().strip()
+    eliminados = []
+    nuevos_items = []
+    
+    for item in carts[user_id]:
+        if nombre_buscar_lower in item["name"].lower():
+            eliminados.append(item)
         else:
-            return f"✅ *{removed['name']}* tchedd mn talab.\n💰 Total: {total} MAD\n\nKteb *TALAB* bach tchouf talab."
-    except Exception as e:
-        logger.error(f"Error eliminando: {e}")
-        return "❌ Error al eliminar"
+            nuevos_items.append(item)
+    
+    if not eliminados:
+        return f"❌ No encontré '{nombre_buscar}' en tu carrito.\nEscribe *PEDIDO* para ver qué tienes."
+    
+    carts[user_id] = nuevos_items
+    total = sum(item["price"] for item in carts[user_id])
+    cantidad = len(eliminados)
+    nombre = eliminados[0]["name"]
+    
+    if lang == 'spanish':
+        return f"✅ *{cantidad} x {nombre}* eliminado del carrito.\n💰 Total actual: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+    else:
+        return f"✅ *{cantidad} x {nombre}* tchedd mn talab.\n💰 Total: {total} MAD"
+
+async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
+    """Elimina un plato por su número de posición"""
+    if user_id not in carts or not carts[user_id]:
+        return "🛒 No hay nada en tu carrito."
+    
+    if item_index < 1 or item_index > len(carts[user_id]):
+        items_count = len(carts[user_id])
+        return f"❌ Número inválido. El carrito tiene {items_count} platos. Escribe *PEDIDO* para ver la lista."
+    
+    removed = carts[user_id].pop(item_index - 1)
+    total = sum(item["price"] for item in carts[user_id])
+    
+    if lang == 'spanish':
+        return f"✅ *{removed['name']}* eliminado del carrito.\n💰 Total actual: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+    else:
+        return f"✅ *{removed['name']}* tchedd mn talab.\n💰 Total: {total} MAD"
 
 async def clear_cart(user_id: str, lang: str) -> str:
-    """Vacía todo el carrito"""
     if user_id in carts:
         carts[user_id] = []
         if lang == 'spanish':
@@ -196,21 +220,87 @@ async def get_cart(user_id: str, lang: str) -> str:
     items_text = "\n".join(item_lines)
     
     if lang == 'spanish':
-        return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para continuar con la entrega."
+        return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para continuar con la entrega.\n\n✍️ Para eliminar un plato: *ELIMINAR 1* (por número) o *ELIMINAR TÉ* (por nombre)"
     else:
         return f"🛒 *TALAB DIALK*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nKteb *CONFIRMAR* bach tkmml."
 
+# ========== PROCESAR COMANDO ELIMINAR ==========
+async def process_remove_command(user_id: str, text: str, lang: str) -> str:
+    """
+    Procesa comandos como:
+    - eliminar 1
+    - elimina 2
+    - quitar 3
+    - eliminar té
+    - elimina harira
+    - quitar omelette
+    - eliminar todo
+    """
+    text_lower = text.lower().strip()
+    
+    # Palabras clave de eliminación
+    remove_words = ['eliminar', 'elimina', 'quitar', 'borrar']
+    
+    # Verificar si la intención es eliminar
+    is_remove = any(text_lower.startswith(word) for word in remove_words)
+    if not is_remove:
+        return None
+    
+    # Eliminar TODO
+    if 'todo' in text_lower or 'carrito' in text_lower or 'todos' in text_lower:
+        return await clear_cart(user_id, lang)
+    
+    # Extraer el resto del comando (lo que viene después de la palabra clave)
+    resto = text_lower
+    for word in remove_words:
+        if text_lower.startswith(word):
+            resto = text_lower[len(word):].strip()
+            break
+    
+    # Si el resto es un número (ej: "eliminar 1")
+    if resto.isdigit():
+        item_num = int(resto)
+        return await remove_from_cart_by_index(user_id, item_num, lang)
+    
+    # Si el resto es un nombre de plato (ej: "eliminar harira")
+    if resto:
+        return await remove_from_cart_by_name(user_id, resto, lang)
+    
+    # No se entendió el comando
+    return None
+
+# ========== PROCESAR CANTIDAD (ej: "6 harira") ==========
+def parse_quantity_command(text: str, platos: List[dict]) -> tuple:
+    """Parsea comandos como '6 harira' -> (item_index, cantidad)"""
+    text_lower = text.lower().strip()
+    match = re.match(r'(\d+)\s+(.+)', text_lower)
+    if not match:
+        return None, None
+    
+    cantidad = int(match.group(1))
+    nombre_buscar = match.group(2).strip()
+    
+    # Buscar por nombre (coincidencia parcial)
+    for i, plato in enumerate(platos, 1):
+        nombre_plato = plato['dish_name'].lower()
+        # Limpiar emojis y caracteres especiales
+        nombre_plato_clean = re.sub(r'[^\w\s]', '', nombre_plato)
+        nombre_buscar_clean = re.sub(r'[^\w\s]', '', nombre_buscar)
+        
+        if nombre_buscar_clean in nombre_plato_clean or nombre_plato_clean in nombre_buscar_clean:
+            return i, cantidad
+    
+    return None, None
+
 # ========== FASES DE ENTREGA Y PAGO ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
-    """Pregunta tipo de entrega"""
     pedido_estado[user_id] = {"fase": "entrega"}
     if lang == 'spanish':
-        return "🚚 *Tipo de entrega*\n\n¿Cómo quieres recibir tu pedido?\n\n• Escribe *RECOGE* - Para recoger en el local\n• Escribe *DOMICILIO* - Para envío a domicilio\n\n📋 El tiempo estimado será de 5-30 minutos."
+        return "🚚 *Tipo de entrega*\n\n¿Cómo quieres recibir tu pedido?\n\n• Escribe *RECOGE* - Para recoger en el local\n• Escribe *DOMICILIO* - Para envío a domicilio"
     else:
         return "🚚 *Nou3 d l'ihsal*\n\n· *RECOGE* - Tji tched fl local\n· *DOMICILIO* - Njibouh lik l dar"
 
 async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
-    """Procesa la respuesta de tipo de entrega"""
     text_lower = text.lower()
     
     if text_lower == 'recoge':
@@ -218,7 +308,7 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
         pedido_estado[user_id]["fase"] = "pago"
         total = sum(item["price"] for item in carts.get(user_id, []))
         if lang == 'spanish':
-            return f"✅ *Recogida en local*\n⏱️ Tiempo estimado: 5-10 minutos\n\n💰 Total a pagar: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recoger\n• *TRANSFERENCIA* - Solo clientes validados\n\n¿Cómo deseas pagar?"
+            return f"✅ *Recogida en local*\n⏱️ Tiempo estimado: 5-10 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recoger\n• *TRANSFERENCIA* - Solo clientes validados"
         else:
             return f"✅ *Tji tched*\n⏱️ Wa9t: 5-10 dqiqa\n\n💰 Total: {total} MAD\n\n• *EFECTIVO* - Khelless mn fach tji tched"
     
@@ -226,57 +316,57 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
         pedido_estado[user_id]["tipo_entrega"] = "domicilio"
         pedido_estado[user_id]["fase"] = "direccion"
         if lang == 'spanish':
-            return "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:\n(Calle, número, ciudad, referencia)"
+            return "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:"
         else:
-            return "📍 *L'adresse*\n\nKteb l'adresse dialk kamla: (Ancienne, numéro, madina)"
+            return "📍 *L'adresse*\n\nKteb l'adresse dialk kamla"
     
     else:
-        return "❌ Opción no válida. Escribe *RECOGE* o *DOMICILIO*"
+        return "❌ Escribe *RECOGE* o *DOMICILIO*"
 
 async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
-    """Guarda la dirección y pasa a método de pago"""
     pedido_estado[user_id]["direccion"] = direccion
     pedido_estado[user_id]["fase"] = "pago"
     total = sum(item["price"] for item in carts.get(user_id, []))
     
     if lang == 'spanish':
-        return f"📍 *Dirección guardada:*\n{direccion}\n\n⏱️ Tiempo estimado: 20-30 minutos\n\n💰 Total a pagar: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recibir\n• *TRANSFERENCIA* - Solo clientes validados\n\n¿Cómo deseas pagar?"
+        return f"📍 Dirección guardada.\n\n⏱️ Tiempo estimado: 20-30 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recibir\n• *TRANSFERENCIA* - Solo clientes validados"
     else:
-        return f"📍 *L'adresse enregistrée*\n\n⏱️ Wa9t: 20-30 dqiqa\n\n💰 Total: {total} MAD\n\n• *EFECTIVO* - Khelless mn fach tjik"
+        return f"📍 L'adresse enregistrée\n\n⏱️ Wa9t: 20-30 dqiqa\n\n💰 Total: {total} MAD\n\n• *EFECTIVO* - Khelless mn fach tjik"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
-    """Procesa el método de pago y confirma el pedido"""
     text_lower = text.lower()
     
     if text_lower == 'efectivo':
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
-        pedido_estado[user_id]["fase"] = "confirmado"
         total = sum(item["price"] for item in carts.get(user_id, []))
         
         # Limpiar carrito y estado
         if user_id in carts:
             carts[user_id] = []
+        if user_id in pedido_estado:
+            del pedido_estado[user_id]
         
         if lang == 'spanish':
-            return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Efectivo\n{'📍 Dirección: ' + pedido_estado[user_id].get('direccion', 'Recogida en local') + '\n' if 'direccion' in pedido_estado[user_id] else ''}\n📋 Tu pedido ha sido enviado a la cocina.\n⏱️ Tiempo estimado: {'5-10 minutos (recoge)' if pedido_estado[user_id].get('tipo_entrega') == 'recoge' else '20-30 minutos (domicilio)'}\n\n¡Gracias por tu compra! 🙏\n\nEscribe *HOLA* para un nuevo pedido."
+            return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Efectivo\n\n📋 Tu pedido ha sido enviado a la cocina.\n\n¡Gracias por tu compra! 🙏\n\nEscribe *HOLA* para un nuevo pedido."
         else:
-            return f"✅ *TALAB MQBOUL!*\n\n💰 Total: {total} MAD\n💳: Efectivo\n📋 Talab dialk terseel l matbakh.\n\nShukran bzaf! 🙏"
+            return f"✅ *TALAB MQBOUL!*\n\n💰 Total: {total} MAD\n💳: Efectivo\n\nShukran bzaf! 🙏"
     
     elif text_lower == 'transferencia':
         pedido_estado[user_id]["metodo_pago"] = "transferencia"
-        pedido_estado[user_id]["fase"] = "confirmado"
         total = sum(item["price"] for item in carts.get(user_id, []))
         
         if user_id in carts:
             carts[user_id] = []
+        if user_id in pedido_estado:
+            del pedido_estado[user_id]
         
         if lang == 'spanish':
-            return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Transferencia bancaria\n📋 Datos bancarios: Banco X, Cuenta: ESXX...\n\n*Importante:* Solo clientes validados.\n\n¡Gracias por tu compra! 🙏"
+            return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Transferencia\n\n📋 Enviaremos los datos bancarios.\n\n¡Gracias por tu compra! 🙏"
         else:
             return f"✅ *TALAB MQBOUL!*\n\n💰 Total: {total} MAD\n💳: Transferencia\n\nShukran bzaf! 🙏"
     
     else:
-        return "❌ Opción no válida. Escribe *EFECTIVO* o *TRANSFERENCIA*"
+        return "❌ Escribe *EFECTIVO* o *TRANSFERENCIA*"
 
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
@@ -323,7 +413,6 @@ async def process_message(body: dict):
                         estado = pedido_estado.get(user_id, {})
                         fase = estado.get("fase", "inicio")
                         
-                        # FASE 1: PEDIDO EN PROCESO (entrega, dirección, pago)
                         if fase == "entrega":
                             response = await procesar_entrega(user_id, text, lang)
                             await send_message(user_id, response)
@@ -335,14 +424,15 @@ async def process_message(body: dict):
                         elif fase == "pago":
                             response = await procesar_pago(user_id, text, lang)
                             await send_message(user_id, response)
-                            # Limpiar estado después de confirmar
-                            if fase == "confirmado" or user_id in pedido_estado:
-                                pass
                             continue
                         
-                        # ========== COMANDOS PRINCIPALES (solo si no está en flujo de pago) ==========
+                        # ========== COMANDOS DE ELIMINACIÓN (prioridad alta) ==========
+                        remove_response = await process_remove_command(user_id, text, lang)
+                        if remove_response:
+                            await send_message(user_id, remove_response)
+                            continue
                         
-                        # Limpieza de carrito con saludos
+                        # ========== COMANDOS PRINCIPALES ==========
                         if text_lower in ['hola', 'salam', 'hello', 'bonjour', 'hallo', 'merhaba', 'سلام']:
                             if user_id in carts:
                                 carts[user_id] = []
@@ -362,18 +452,7 @@ async def process_message(body: dict):
                             if user_id in carts and carts[user_id]:
                                 response = await iniciar_entrega(user_id, lang)
                             else:
-                                response = "🛒 *Carrito vacío*\n\nEscribe *MENU* para agregar platos primero."
-                        
-                        elif text_lower == 'eliminar todo' or text_lower == 'vaciar todo':
-                            response = await clear_cart(user_id, lang)
-                        
-                        elif text_lower.startswith('eliminar') or text_lower.startswith('quitar'):
-                            parts = text_lower.split()
-                            if len(parts) == 2 and parts[1].isdigit():
-                                item_num = int(parts[1])
-                                response = await remove_from_cart(user_id, item_num, lang)
-                            else:
-                                response = "❌ Uso: *ELIMINAR 3* para quitar un plato, o *ELIMINAR TODO* para vaciar el carrito."
+                                response = "🛒 *Carrito vacío*\n\nEscribe *MENU* para agregar platos."
                         
                         elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardim', 'مساعدة']:
                             response = LanguageDetector.get_help(lang)
@@ -383,7 +462,13 @@ async def process_message(body: dict):
                             response = await add_to_cart(user_id, item_num, 1, client_id, lang)
                         
                         else:
-                            response = LanguageDetector.get_help(lang)
+                            # Intentar parsear cantidad (ej: "6 harira")
+                            _, platos = await get_restaurant_menu(client_id)
+                            item_num, cantidad = parse_quantity_command(text, platos)
+                            if item_num and cantidad:
+                                response = await add_to_cart(user_id, item_num, cantidad, client_id, lang)
+                            else:
+                                response = LanguageDetector.get_help(lang)
                         
                         await send_message(user_id, response)
                         
@@ -403,7 +488,7 @@ async def send_message(to: str, message: str):
 # ========== API ENDPOINTS ==========
 @app.get("/")
 async def root():
-    return {"status": "ok", "version": VERSION, "service": "Orquestrator ISA", "features": ["Pedido completo", "Entrega", "Pago", "Eliminar platos"]}
+    return {"status": "ok", "version": VERSION, "service": "Orquestrator ISA"}
 
 @app.get("/health")
 async def health():
@@ -413,18 +498,11 @@ async def health():
         supabase_status = True
     except:
         pass
-    return {
-        "status": "healthy",
-        "version": VERSION,
-        "supabase": supabase_status,
-        "whatsapp": bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID),
-        "carts_active": len(carts),
-        "active_orders": len(pedido_estado)
-    }
+    return {"status": "healthy", "version": VERSION, "supabase": supabase_status, "whatsapp": bool(WHATSAPP_TOKEN and PHONE_NUMBER_ID), "carts_active": len(carts)}
 
 @app.get("/api/version")
 async def version():
-    return {"version": VERSION, "features": ["EliminarPlatos", "Entrega", "Domicilio", "PagoEfectivo", "PagoTransferencia", "MultiIdioma"]}
+    return {"version": VERSION, "features": ["EliminarPorNombre", "EliminarPorNumero", "Cantidades", "Entrega", "Pago"]}
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
@@ -445,13 +523,7 @@ async def get_platos(client_id: str):
 async def create_plato(item: dict):
     if not supabase:
         raise HTTPException(500, "Supabase no configurado")
-    data = {
-        "client_id": item["client_id"],
-        "dish_name": item["nombre"],
-        "price": item["precio"],
-        "description": item.get("descripcion", ""),
-        "is_available": True
-    }
+    data = {"client_id": item["client_id"], "dish_name": item["nombre"], "price": item["precio"], "description": item.get("descripcion", ""), "is_available": True}
     result = supabase.table("menu_items").insert(data).execute()
     if result.data:
         return {"plato": {"id_plato": result.data[0]["id"], "nombre": result.data[0]["dish_name"], "precio": result.data[0]["price"]}}
