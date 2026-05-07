@@ -265,63 +265,95 @@ def parse_quantity_command(text: str, platos: List[dict]) -> tuple:
     return None, None
 
 # ========== FASES DE ENTREGA Y PAGO (ROBUSTO CON SINÓNIMOS) ==========
+
 async def iniciar_entrega(user_id: str, lang: str) -> str:
     pedido_estado[user_id] = {"fase": "entrega"}
-    return "🚚 *Tipo de entrega*\n\n¿Cómo quieres recibir tu pedido?\n\n• Escribe *RECOGE* - Para recoger en el local\n• Escribe *DOMICILIO* - Para envío a domicilio"
+    return "🚚 *Tipo de entrega*\n\n• *1* - Recoge en local\n• *2* - Envío a domicilio\n\nEscribe el número de tu opción:"
 
 async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
     
-    if match_comando(text, 'recoge'):
+    if text_lower == '1' or text_lower == 'recoge' or text_lower == 'local':
         pedido_estado[user_id]["tipo_entrega"] = "recoge"
         pedido_estado[user_id]["fase"] = "pago"
         total = sum(item["price"] for item in carts.get(user_id, []))
-        return f"✅ *Recogida en local*\n⏱️ Tiempo estimado: 5-10 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recoger\n• *TRANSFERENCIA* - Solo clientes validados"
+        return f"✅ *Recogida en local*\n⏱️ Tiempo: 5-10 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia\n\nEscribe el número de tu opción:"
     
-    elif match_comando(text, 'domicilio'):
+    elif text_lower == '2' or text_lower == 'domicilio' or text_lower == 'envío':
         pedido_estado[user_id]["tipo_entrega"] = "domicilio"
         pedido_estado[user_id]["fase"] = "direccion"
         return "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:"
     
     else:
-        return "❌ No entendí. Escribe *RECOGE* (recoger en local) o *DOMICILIO* (envío a casa)."
+        return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
 
-async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
-    pedido_estado[user_id]["direccion"] = direccion
-    pedido_estado[user_id]["fase"] = "pago"
-    total = sum(item["price"] for item in carts.get(user_id, []))
-    
-    return f"📍 Dirección guardada: {direccion}\n\n⏱️ Tiempo estimado: 20-30 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *EFECTIVO* - Paga al recibir\n• *TRANSFERENCIA* - Solo clientes validados"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
     
-    if match_comando(text, 'efectivo'):
+    if text_lower == '1' or text_lower == 'efectivo' or text_lower == 'cash':
+        metodo = "Efectivo"
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
         total = sum(item["price"] for item in carts.get(user_id, []))
         
-        # Limpiar carrito y estado
+        # Limpiar carrito
         if user_id in carts:
             carts[user_id] = []
+        
+        tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
+        direccion = pedido_estado[user_id].get("direccion", "").strip()
+        
+        # Construir mensaje sin f-strings complejos
+        mensaje = f"✅ *¡PEDIDO CONFIRMADO!*\n\n"
+        mensaje += f"💰 Total: {total} MAD\n"
+        mensaje += f"💳 Método: {metodo}\n"
+        
+        if tipo == "recoge":
+            mensaje += "📍 Recogida en local\n"
+            mensaje += "⏱️ Tiempo estimado: 5-10 minutos\n"
+        else:
+            mensaje += f"📍 Dirección: {direccion}\n"
+            mensaje += "⏱️ Tiempo estimado: 20-30 minutos\n"
+        
+        mensaje += "\n📋 Tu pedido ha sido enviado a la cocina.\n\n"
+        mensaje += "¡Gracias por tu compra! 🙏\n\n"
+        mensaje += "Escribe *HOLA* para un nuevo pedido."
+        
+        # Limpiar estado
         if user_id in pedido_estado:
             del pedido_estado[user_id]
         
-        return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Efectivo\n{'📍 Dirección: ' + pedido_estado.get(user_id, {}).get('direccion', 'Recogida en local') + '\n' if user_id in pedido_estado and 'direccion' in pedido_estado[user_id] else '📍 Recogida en local\n'}⏱️ Tiempo estimado: {'5-10 minutos' if pedido_estado.get(user_id, {}).get('tipo_entrega') == 'recoge' else '20-30 minutos'}\n\n📋 Tu pedido ha sido enviado a la cocina.\n\n¡Gracias por tu compra! 🙏\n\nEscribe *HOLA* para un nuevo pedido."
+        return mensaje
     
-    elif match_comando(text, 'transferencia'):
+    elif text_lower == '2' or text_lower == 'transferencia' or text_lower == 'transfer':
+        metodo = "Transferencia"
         pedido_estado[user_id]["metodo_pago"] = "transferencia"
         total = sum(item["price"] for item in carts.get(user_id, []))
         
         if user_id in carts:
             carts[user_id] = []
+        
+        tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
+        
+        mensaje = f"✅ *¡PEDIDO CONFIRMADO!*\n\n"
+        mensaje += f"💰 Total: {total} MAD\n"
+        mensaje += f"💳 Método: {metodo}\n"
+        
+        if tipo == "recoge":
+            mensaje += "📍 Recogida en local\n"
+        else:
+            mensaje += "📍 Envío a domicilio\n"
+        
+        mensaje += "\n📋 Enviaremos los datos bancarios por separado.\n\n"
+        mensaje += "¡Gracias por tu compra! 🙏"
+        
         if user_id in pedido_estado:
             del pedido_estado[user_id]
         
-        return f"✅ *¡PEDIDO CONFIRMADO!*\n\n💰 Total: {total} MAD\n💳 Método: Transferencia bancaria\n\n📋 Enviaremos los datos bancarios por separado.\n\n¡Gracias por tu compra! 🙏"
+        return mensaje
     
     else:
-        return "❌ No entendí. Escribe *EFECTIVO* o *TRANSFERENCIA*."
-
+        return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
 async def webhook_verify(request: Request):
