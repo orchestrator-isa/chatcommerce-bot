@@ -234,15 +234,16 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
             })
         
         data = {
-            "cliente_telefono": user_id,
-            "cliente_nombre": cliente_nombre,
-            "items": items_json,
-            "total": total,
+            "id_cliente": user_id,  # en lugar de cliente_telefono
+            "cliente_telefono": user_id,  # ambos para compatibilidad
+            "items_json": items_json,  # en lugar de items
+            "total_mad": total,  # en lugar de total
             "estado": "nuevo",
             "tipo_entrega": tipo_entrega,
             "direccion": direccion,
             "metodo_pago": metodo_pago,
-            "pagado": False
+            "pagado": False,
+            "fecha_creacion": "now()"
         }
         
         result = supabase.table("pedidos").insert(data).execute()
@@ -481,6 +482,15 @@ async def send_message(to: str, message: str):
     data = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message[:1600]}}
     async with httpx.AsyncClient() as client:
         await client.post(url, headers=headers, json=data)
+
+sed -i 's/from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks/from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks\nfrom fastapi.staticfiles import StaticFiles/' main.py
+
+# Añadir el mount después de crear app
+sed -i '/app = FastAPI/a\
+\
+# Servir archivos estáticos (dashboard)\
+os.makedirs("static", exist_ok=True)\
+app.mount("/static", StaticFiles(directory="static"), name="static")' main.py
 
 # ========== API ENDPOINTS (Dashboard) ==========
 @app.get("/")

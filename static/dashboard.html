@@ -12,7 +12,6 @@
         .pedido.nuevo { border-left-color: #fbbf24; }
         .pedido.confirmado { border-left-color: #4ade80; }
         .pedido.listo { border-left-color: #22d3ee; }
-        .pedido.entregado { border-left-color: #94a3b8; }
         .numero { font-size: 1.3rem; font-weight: bold; color: #22d3ee; }
         .estado { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; margin-left: 10px; }
         .estado-nuevo { background: #fbbf24; color: #0f172a; }
@@ -55,51 +54,40 @@
                     return;
                 }
                 
-                container.innerHTML = data.pedidos.map(p => `
+                container.innerHTML = data.pedidos.map(p => {
+                    let items = [];
+                    if (p.items_json) {
+                        items = p.items_json;
+                    } else if (p.items) {
+                        items = p.items;
+                    }
+                    return `
                     <div class="pedido ${p.estado}">
                         <div class="flex" style="justify-content: space-between;">
                             <div>
                                 <span class="numero">#${p.numero}</span>
                                 <span class="estado estado-${p.estado}">${p.estado.toUpperCase()}</span>
                             </div>
-                            <div style="color:#94a3b8; font-size:0.8rem;">${new Date(p.created_at).toLocaleTimeString()}</div>
+                            <div style="color:#94a3b8; font-size:0.8rem;">${new Date(p.created_at || p.fecha_creacion).toLocaleTimeString()}</div>
                         </div>
                         <div style="margin-top: 10px;">
-                            ${p.items_json ? p.items_json.map(i => `<div>🍽️ ${i.cantidad}x ${i.name} — ${i.price * i.cantidad} MAD</div>`).join('') : 'Sin items'}
+                            ${items.map(i => `<div>🍽️ ${i.cantidad || 1}x ${i.name || i.nombre} — ${(i.price || i.precio) * (i.cantidad || 1)} MAD</div>`).join('')}
                         </div>
                         <div class="total">💰 Total: ${p.total_mad || p.total} MAD</div>
                         <div style="color:#94a3b8; font-size:0.8rem; margin-top:8px;">
-                            📞 ${p.cliente_telefono || p.id_cliente} | 
+                            📞 ${p.cliente_telefono || p.id_cliente || 'No disponible'} | 
                             🚚 ${p.tipo_entrega || 'No especificado'} | 
                             💳 ${p.metodo_pago || 'Efectivo'}
                         </div>
-                        <div class="flex" style="margin-top: 10px;">
-                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'confirmado')">✅ Confirmar</button>
-                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'listo')">🍽️ Marcar Listo</button>
-                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'entregado')">📦 Entregar</button>
-                        </div>
                     </div>
-                `).join('');
+                `}).join('');
             } catch (error) {
-                document.getElementById('pedidos-container').innerHTML = '<div class="pedido">❌ Error al cargar pedidos</div>';
-            }
-        }
-        
-        async function cambiarEstado(numero, nuevoEstado) {
-            try {
-                const res = await fetch(`/api/pedido/${numero}/estado?estado=${nuevoEstado}`, { method: 'PUT' });
-                if (res.ok) {
-                    cargarPedidos();
-                } else {
-                    alert('Error al actualizar estado');
-                }
-            } catch (error) {
-                alert('Error de conexión');
+                document.getElementById('pedidos-container').innerHTML = '<div class="pedido">❌ Error al cargar pedidos. Asegurate de que el servidor esté corriendo.</div>';
             }
         }
         
         cargarPedidos();
-        setInterval(cargarPedidos, 30000); // Actualizar cada 30 segundos
+        setInterval(cargarPedidos, 30000);
     </script>
 </body>
 </html>
