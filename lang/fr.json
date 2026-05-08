@@ -1,0 +1,11 @@
+{
+  "welcome": "👋 Bonjour! Bienvenue à El Reducto. Tapez *MENU* pour voir nos plats.",
+  "help": "📋 *Commandes*\n• *MENU* - Voir la carte\n• *NUMÉRO* - Ajouter un plat\n• *QUANTITÉ* - Ex: '3 coca'\n• *COMMANDE* - Voir le panier\n• *SUPPRIMER X* - Retirer un plat\n• *CONFIRMER* - Finaliser",
+  "cart_empty": "🛒 *Panier vide*\n\nTapez *MENU* pour voir nos plats.",
+  "added_to_cart": "✅ *{cantidad} x {nombre}* ajouté.\n💰 Sous-total: {total} MAD",
+  "removed_item": "✅ *{cantidad} x {nombre}* retiré.\n💰 Nouveau total: {total} MAD",
+  "delivery_type": "🚚 *Type de livraison*\n\n• *1* - À emporter\n• *2* - Livraison à domicile\n\nChoisissez une option:",
+  "payment_method": "💳 *Mode de paiement*\n\n• *1* - Espèces\n• *2* - Virement bancaire\n\nChoisissez une option:",
+  "order_confirmed": "✅ *COMMANDE CONFIRMÉE!*\n\n📋 *N° de commande: {numero}*\n💰 Total: {total} MAD\n💳 Paiement: {metodo}\n⏱️ Délai: {tiempo}\n\n🙏 Merci pour votre achat!\n\nTapez *BONJOUR* pour une nouvelle commande.",
+  "address_request": "📍 *Adresse de livraison*\n\nVeuillez écrire votre adresse complète:"
+}

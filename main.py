@@ -2,7 +2,10 @@
 import os
 import logging
 import re
+import json
+import uuid
 from datetime import datetime
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,9 +13,8 @@ from supabase import create_client
 from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
-import uuid
 
-VERSION = "6.1-TICKETS-PDF"
+VERSION = "6.2-MULTI-IDIOMA-COMPLETO"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -29,9 +31,43 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABAS
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ========== ARCHIVOS ESTÁTICOS (Dashboard) ==========
+# ========== ARCHIVOS ESTÁTICOS ==========
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ========== CARGA DE IDIOMAS ==========
+LANG_DIR = Path("lang")
+LANGUAGES = {}
+
+if LANG_DIR.exists():
+    for lang_file in LANG_DIR.glob("*.json"):
+        lang_code = lang_file.stem
+        try:
+            with open(lang_file, "r", encoding="utf-8") as f:
+                LANGUAGES[lang_code] = json.load(f)
+            logger.info(f"✅ Cargado idioma: {lang_code}")
+        except Exception as e:
+            logger.error(f"❌ Error cargando {lang_file}: {e}")
+else:
+    logger.warning("⚠️ Carpeta 'lang' no encontrada")
+    LANG_DIR.mkdir(exist_ok=True)
+
+LANG_MAP = {
+    'english': 'en',
+    'spanish': 'en',
+    'darija_latin': 'dar',
+    'darija_arabic': 'ar',
+    'french': 'fr',
+    'turkish': 'tr',
+    'german': 'de'
+}
+
+def get_text(lang_code: str, key: str, **kwargs) -> str:
+    """Obtiene texto en el idioma solicitado"""
+    file_key = LANG_MAP.get(lang_code, 'en')
+    texts = LANGUAGES.get(file_key, LANGUAGES.get('en', {}))
+    template = texts.get(key, LANGUAGES['en'].get(key, key))
+    return template.format(**kwargs) if kwargs else template
 
 # ========== CARITOS Y ESTADOS ==========
 carts: Dict[str, List[dict]] = {}
@@ -75,30 +111,15 @@ def match_comando(text: str, comando: str) -> bool:
 # ========== NLP: DETECCIÓN DE IDIOMA ==========
 class LanguageDetector:
     KEYWORDS = {
+        'english': ['hello', 'hi', 'menu', 'thank', 'want'],
         'spanish': ['hola', 'menu', 'gracias', 'quiero', 'plato'],
-        'english': ['hello', 'menu', 'thank', 'want'],
-        'french': ['bonjour', 'menu', 'merci'],
+        'french': ['bonjour', 'salut', 'menu', 'merci'],
         'german': ['hallo', 'menü', 'danke'],
         'turkish': ['merhaba', 'menü', 'teşekkür'],
         'darija_latin': ['salam', 'menu', 'marhba', 'bghit', 'shhal'],
         'darija_arabic': ['سلام', 'قائمة', 'مرحبا', 'بغيت', 'شحال']
     }
     
-    WELCOME = {
-        'spanish': '👋 ¡Hola! Bienvenido a El Reducto. Escribe *MENU* para ver nuestros platos.',
-        'english': '👋 Hello! Welcome to El Reducto. Type *MENU* to see our dishes.',
-        'french': '👋 Bonjour! Bienvenue à El Reducto. Tapez *MENU* pour voir nos plats.',
-        'german': '👋 Hallo! Willkommen in El Reducto. Gib *MENU* ein für unsere Gerichte.',
-        'turkish': '👋 Merhaba! El Reducto\'ya hoş geldiniz. Yemekler için *MENU* yazın.',
-        'darija_latin': '👋 Salam! Marhba bik f El Reducto. Kteb *MENU* bach tchouf lmaakoulat.',
-        'darija_arabic': '👋 سلام! مرحبا بيك ف إيل ريدوكتو. اكتب *MENU* باش تشوف الماكولات.'
-    }
-    
-    HELP = {
-        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: "3 coca"\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *CONFIRMAR* - Finalizar',
-        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan "3 coca"\n• *TALAB* - Chouf talab\n• *ELIMINAR X* - Hedi flakla\n• *CONFIRMAR* - Kmml talab'
-    }
-
     @classmethod
     def detect(cls, text: str) -> str:
         text_lower = text.lower().strip()
@@ -107,15 +128,15 @@ class LanguageDetector:
         scores = {lang: sum(1 for k in keywords if k in text_lower) 
                   for lang, keywords in cls.KEYWORDS.items()}
         best = max(scores, key=scores.get)
-        return best if scores[best] > 0 else 'spanish'
+        return best if scores[best] > 0 else 'english'
     
     @classmethod
     def get_welcome(cls, lang: str) -> str:
-        return cls.WELCOME.get(lang, cls.WELCOME['spanish'])
+        return get_text(lang, 'welcome')
     
     @classmethod
     def get_help(cls, lang: str) -> str:
-        return cls.HELP.get(lang, cls.HELP['spanish'])
+        return get_text(lang, 'help')
 
 # ========== MENÚ ==========
 @lru_cache(maxsize=100)
@@ -145,7 +166,7 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
     try:
         _, platos = await get_restaurant_menu(client_id)
         if not platos or item_index > len(platos):
-            return LanguageDetector.get_help(lang)
+            return get_text(lang, 'help')
         selected = platos[item_index - 1]
         
         if user_id not in carts:
@@ -155,14 +176,17 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
             carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
         
         total = sum(item["price"] for item in carts[user_id])
-        return f"✅ *{cantidad} x {selected['dish_name']}* añadido.\n💰 Total parcial: {total} MAD"
+        return get_text(lang, 'added_to_cart', 
+                       cantidad=cantidad, 
+                       nombre=selected['dish_name'], 
+                       total=total)
     except Exception as e:
         logger.error(f"Error carrito: {e}")
         return "❌ Error al añadir"
 
 async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
-        return "🛒 No hay nada en tu carrito."
+        return get_text(lang, 'cart_empty')
     
     nombre_buscar_lower = nombre_buscar.lower().strip()
     eliminados = []
@@ -181,28 +205,34 @@ async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) 
     total = sum(item["price"] for item in carts[user_id])
     cantidad = len(eliminados)
     nombre = eliminados[0]["name"]
-    return f"✅ *{cantidad} x {nombre}* eliminado.\n💰 Total actual: {total} MAD"
+    return get_text(lang, 'removed_item', 
+                   cantidad=cantidad, 
+                   nombre=nombre, 
+                   total=total)
 
 async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
-        return "🛒 No hay nada en tu carrito."
+        return get_text(lang, 'cart_empty')
     
     if item_index < 1 or item_index > len(carts[user_id]):
         return f"❌ Número inválido. El carrito tiene {len(carts[user_id])} platos."
     
     removed = carts[user_id].pop(item_index - 1)
     total = sum(item["price"] for item in carts[user_id])
-    return f"✅ *{removed['name']}* eliminado.\n💰 Total actual: {total} MAD"
+    return get_text(lang, 'removed_item', 
+                   cantidad=1, 
+                   nombre=removed['name'], 
+                   total=total)
 
 async def clear_cart(user_id: str, lang: str) -> str:
     if user_id in carts:
         carts[user_id] = []
         return "🗑️ *Carrito vaciado* completamente."
-    return "🛒 Tu carrito ya está vacío."
+    return get_text(lang, 'cart_empty')
 
 async def get_cart(user_id: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
-        return "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver nuestros platos."
+        return get_text(lang, 'cart_empty')
     
     items_dict = {}
     for item in carts[user_id]:
@@ -224,7 +254,6 @@ async def get_cart(user_id: str, lang: str) -> str:
     return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar."
 
 # ========== FUNCIONES DE PEDIDOS (TICKETS) ==========
-
 async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: int, tipo_entrega: str = None, direccion: str = None, metodo_pago: str = None) -> dict:
     try:
         if not supabase:
@@ -239,8 +268,8 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
             })
         
         data = {
-            "id_cliente": str(uuid.uuid4()),  # ← UUID aleatorio para la FK
-            "cliente_telefono": user_id,      # ← número de teléfono real
+            "id_cliente": str(uuid.uuid4()),
+            "cliente_telefono": user_id,
             "items_json": items_json,
             "total_mad": total,
             "estado": "nuevo",
@@ -248,7 +277,7 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
             "direccion": direccion,
             "metodo_pago": metodo_pago,
             "pagado": False,
-            "fecha_creacion": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat()
         }
         
         result = supabase.table("pedidos").insert(data).execute()
@@ -263,7 +292,6 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
 
 # ========== ENVIAR MENÚ EN PDF ==========
 async def enviar_menu_pdf(to: str):
-    """Envía el menú en PDF por WhatsApp"""
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WhatsApp no configurado para enviar PDF")
         return False
@@ -333,25 +361,25 @@ def parse_quantity_command(text: str, platos: List[dict]) -> tuple:
 # ========== PROCESAR CONFIRMACIÓN ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
     pedido_estado[user_id] = {"fase": "entrega"}
-    return "🚚 *Tipo de entrega*\n\n• *1* - Recoge en local\n• *2* - Envío a domicilio\n\nEscribe el número de tu opción:"
+    return get_text(lang, 'delivery_type')
 
 async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
     if text == '1' or match_comando(text, 'recoge'):
         pedido_estado[user_id]["tipo_entrega"] = "recoge"
         pedido_estado[user_id]["fase"] = "pago"
         total = sum(item["price"] for item in carts.get(user_id, []))
-        return f"✅ *Recogida en local*\n⏱️ Tiempo: 5-10 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia\n\nEscribe el número de tu opción:"
+        return f"✅ *Recogida en local*\n⏱️ Tiempo: 5-10 minutos\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
     elif text == '2' or match_comando(text, 'domicilio'):
         pedido_estado[user_id]["tipo_entrega"] = "domicilio"
         pedido_estado[user_id]["fase"] = "direccion"
-        return "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:"
+        return get_text(lang, 'address_request')
     return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
 
 async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
     pedido_estado[user_id]["direccion"] = direccion
     pedido_estado[user_id]["fase"] = "pago"
     total = sum(item["price"] for item in carts.get(user_id, []))
-    return f"📍 Dirección guardada.\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia\n\nEscribe el número de tu opción:"
+    return f"📍 Dirección guardada.\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     if text == '1' or match_comando(text, 'efectivo'):
@@ -396,7 +424,8 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     if user_id in pedido_estado:
         del pedido_estado[user_id]
     
-    return f"✅ *¡PEDIDO CONFIRMADO!*\n\n📋 *Número de pedido: #{numero}*\n💰 Total: {total} MAD\n💳 Método: {metodo}\n⏱️ Tiempo: {tiempo}\n\n📋 Tu pedido #{numero} ha sido enviado a la cocina.\n\n¡Gracias por tu compra! 🙏\n\nEscribe *HOLA* para un nuevo pedido."
+    return get_text(lang, 'order_confirmed', 
+                   numero=numero, total=total, metodo=metodo, tiempo=tiempo)
 
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
@@ -459,7 +488,7 @@ async def process_message(body: dict):
                             await send_message(user_id, remove_response)
                             continue
                         
-                        if text_lower in ['hola', 'salam', 'hello', 'bonjour', 'hallo', 'merhaba', 'سلام']:
+                        if text_lower in ['hola', 'salam', 'hello', 'hi', 'bonjour', 'hallo', 'merhaba', 'سلام']:
                             if user_id in carts:
                                 carts[user_id] = []
                             if user_id in pedido_estado:
@@ -479,7 +508,7 @@ async def process_message(body: dict):
                             if user_id in carts and carts[user_id]:
                                 response = await iniciar_entrega(user_id, lang)
                             else:
-                                response = "🛒 *Carrito vacío*\n\nEscribe *MENU* para agregar platos."
+                                response = get_text(lang, 'cart_empty')
                         
                         elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardim', 'مساعدة']:
                             response = LanguageDetector.get_help(lang)
@@ -528,7 +557,7 @@ async def health():
 
 @app.get("/api/version")
 async def version():
-    return {"version": VERSION, "features": ["Tickets", "PDF", "MultiIdioma", "Carrito", "Entrega", "Pago"]}
+    return {"version": VERSION, "features": ["Tickets", "PDF", "MultiIdioma", "Carrito", "Entrega", "Pago", "6 Idiomas"]}
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
@@ -566,7 +595,7 @@ async def get_pedidos(estado: str = None):
         raise HTTPException(500, "Supabase no configurado")
     try:
         hoy = datetime.now().date().isoformat()
-        query = supabase.table("pedidos").select("*").gte("fecha_creacion", hoy)
+        query = supabase.table("pedidos").select("*").gte("created_at", hoy)
         if estado:
             query = query.eq("estado", estado)
         result = query.order("numero", desc=False).execute()
@@ -594,7 +623,7 @@ async def stats_diario():
         raise HTTPException(500, "Supabase no configurado")
     try:
         hoy = datetime.now().date().isoformat()
-        result = supabase.table("pedidos").select("*").gte("fecha_creacion", hoy).execute()
+        result = supabase.table("pedidos").select("*").gte("created_at", hoy).execute()
         pedidos = result.data
         
         total_ventas = sum(p.get("total_mad", 0) for p in pedidos)
@@ -615,7 +644,7 @@ async def stats_diario():
 async def startup():
     logger.info(f"🚀 Bot {VERSION} iniciando...")
     await load_phone_mapping()
-    # Crear dashboard.html si no existe
+    logger.info(f"✅ {len(LANGUAGES)} idiomas cargados: {list(LANGUAGES.keys())}")
     dashboard_path = "static/dashboard.html"
     if not os.path.exists(dashboard_path):
         os.makedirs("static", exist_ok=True)
@@ -643,7 +672,8 @@ h1{color:#22d3ee;margin-bottom:20px}
 <div class="flex"><button class="btn" onclick="cargarPedidos()">🔄 Actualizar</button>
 <select id="filtro" onchange="cargarPedidos()" style="background:#1e293b;color:white;padding:8px;border-radius:8px">
 <option value="">Todos</option><option value="nuevo">🆕 Nuevos</option>
-<option value="confirmado">✅ Confirmados</option><option value="listo">🍽️ Listos</option>
+<option value="confirmado">✅ Confirmados</option>
+<option value="listo">🍽️ Listos</option>
 <option value="entregado">📦 Entregados</option>
 </select></div>
 <div id="pedidos-container">Cargando...</div>
@@ -677,7 +707,7 @@ setInterval(cargarPedidos,30000);
 </script>
 </body>
 </html>''')
-    logger.info(f"✅ Listo. {len(phone_to_restaurant)} restaurantes mapeados")
+    logger.info(f"✅ Sistema multi-idioma listo. Bot {VERSION} funcionando.")
 
 if __name__ == "__main__":
     import uvicorn

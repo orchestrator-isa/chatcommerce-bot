@@ -1,0 +1,11 @@
+{
+  "welcome": "👋 Salam! Marhba bik f El Reducto. Kteb *MENU* bach tchouf lmaakoulat.",
+  "help": "📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan '3 coca'\n• *TALAB* - Chouf talab\n• *REMOVE X* - Hedi flakla\n• *CONFIRM* - Kmml talab",
+  "cart_empty": "🛒 *Talab khawi*\n\nKteb *MENU* bach tchouf lmaakoulat.",
+  "added_to_cart": "✅ *{cantidad} x {nombre}* tzad.\n💰 Total dlaba: {total} MAD",
+  "removed_item": "✅ *{cantidad} x {nombre}* tehhed.\n💰 Total jdid: {total} MAD",
+  "delivery_type": "🚚 *Nou3 d l'livraison*\n\n• *1* - Hder f l'local\n• *2* - Livraison l'dar\n\nKteb raqm dialek:",
+  "payment_method": "💳 *Kifash ndf3o?*\n\n• *1* - Liquide\n• *2* - Transfert bancaire\n\nKteb raqm dialek:",
+  "order_confirmed": "✅ *TALAB MKEDED!*\n\n📋 *Ra9m l'talab: {numero}*\n💰 Total: {total} MAD\n💳 Tara2a: {metodo}\n⏱️ Wa9t: {tiempo}\n\n🙏 Chokran bzaf!\n\nKteb *SALAM* bach tdir talab jdid.",
+  "address_request": "📍 *Adresse l'livraison*\n\nAqh kteb adresse kamla dyalk:"
+}

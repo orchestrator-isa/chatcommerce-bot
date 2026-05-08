@@ -1,0 +1,11 @@
+{
+  "welcome": "👋 Merhaba! El Reducto'ya hoş geldiniz. Yemekleri görmek için *MENÜ* yazın.",
+  "help": "📋 *Komutlar*\n• *MENÜ* - Yemekleri gör\n• *NUMARA* - Yemek ekle\n• *MIKTAR* - Örn: '3 kola'\n• *SİPARİŞ* - Sepeti gör\n• *SİL X* - Yemeği kaldır\n• *ONAYLA* - Tamamla",
+  "cart_empty": "🛒 *Boş sepet*\n\nYemekleri görmek için *MENÜ* yazın.",
+  "added_to_cart": "✅ *{cantidad} x {nombre}* eklendi.\n💰 Ara toplam: {total} MAD",
+  "removed_item": "✅ *{cantidad} x {nombre}* kaldırıldı.\n💰 Yeni toplam: {total} MAD",
+  "delivery_type": "🚚 *Teslimat türü*\n\n• *1* - Paket servis (al)\n• *2* - Eve teslim\n\nBir seçenek yazın:",
+  "payment_method": "💳 *Ödeme yöntemi*\n\n• *1* - Nakit\n• *2* - Banka havalesi\n\nBir seçenek yazın:",
+  "order_confirmed": "✅ *SİPARİŞ ONAYLANDI!*\n\n📋 *Sipariş No: {numero}*\n💰 Toplam: {total} MAD\n💳 Ödeme: {metodo}\n⏱️ Süre: {tiempo}\n\n🙏 Teşekkür ederiz!\n\nYeni sipariş için *MERHABA* yazın.",
+  "address_request": "📍 *Teslimat adresi*\n\nLütfen tam adresinizi yazın:"
+}
