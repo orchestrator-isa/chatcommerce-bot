@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "6.2-MULTI-IDIOMA-COMPLETO"
+VERSION = "6.3-MULTI-IDIOMA-FIXED"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -139,18 +139,20 @@ class LanguageDetector:
         return get_text(lang, 'help')
 
 # ========== MENÚ ==========
-@lru_cache(maxsize=100)
-async def get_restaurant_menu_cached(client_id: str) -> tuple:
-    return await get_restaurant_menu(client_id)
-
-async def get_restaurant_menu(client_id: str) -> tuple:
+async def get_restaurant_menu(client_id: str, user_lang_code: str = 'english') -> tuple:
     try:
         if not supabase:
             return "❌ Error de conexión", []
         result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
         if not result.data:
-            return "📋 *MENÚ*\nNo hay platos disponibles.", []
-        menu_lines = ["📋 *MENÚ DE EL REDUCTO*", ""]
+            return "📋 *MENU*\nNo dishes available.", []
+        
+        if user_lang_code == 'english':
+            menu_header = "📋 *MENU*"
+        else:
+            menu_header = "📋 *MENÚ DE EL REDUCTO*"
+        
+        menu_lines = [menu_header, ""]
         for i, item in enumerate(result.data, 1):
             menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {item['price']} MAD")
             if item.get('description'):
@@ -159,12 +161,12 @@ async def get_restaurant_menu(client_id: str) -> tuple:
         return "\n".join(menu_lines), result.data
     except Exception as e:
         logger.error(f"Error menú: {e}")
-        return "❌ Error al cargar el menú", []
+        return "❌ Error loading menu", []
 
 # ========== FUNCIONES DEL CARRITO ==========
 async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: str, lang: str) -> str:
     try:
-        _, platos = await get_restaurant_menu(client_id)
+        _, platos = await get_restaurant_menu(client_id, lang)
         if not platos or item_index > len(platos):
             return get_text(lang, 'help')
         selected = platos[item_index - 1]
@@ -182,7 +184,7 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
                        total=total)
     except Exception as e:
         logger.error(f"Error carrito: {e}")
-        return "❌ Error al añadir"
+        return "❌ Error adding to cart"
 
 async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
@@ -199,7 +201,7 @@ async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) 
             nuevos_items.append(item)
     
     if not eliminados:
-        return f"❌ No encontré '{nombre_buscar}' en tu carrito."
+        return f"❌ Could not find '{nombre_buscar}' in your cart."
     
     carts[user_id] = nuevos_items
     total = sum(item["price"] for item in carts[user_id])
@@ -215,7 +217,7 @@ async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) ->
         return get_text(lang, 'cart_empty')
     
     if item_index < 1 or item_index > len(carts[user_id]):
-        return f"❌ Número inválido. El carrito tiene {len(carts[user_id])} platos."
+        return f"❌ Invalid number. Cart has {len(carts[user_id])} items."
     
     removed = carts[user_id].pop(item_index - 1)
     total = sum(item["price"] for item in carts[user_id])
@@ -227,7 +229,7 @@ async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) ->
 async def clear_cart(user_id: str, lang: str) -> str:
     if user_id in carts:
         carts[user_id] = []
-        return "🗑️ *Carrito vaciado* completamente."
+        return "🗑️ *Cart cleared* completely."
     return get_text(lang, 'cart_empty')
 
 async def get_cart(user_id: str, lang: str) -> str:
@@ -251,13 +253,14 @@ async def get_cart(user_id: str, lang: str) -> str:
             item_lines.append(f"• {name} — {data['price']} MAD")
     
     items_text = "\n".join(item_lines)
-    return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar."
+    confirm_text = "Type *CONFIRM* to checkout" if lang == 'english' else "Escribe *CONFIRMAR* para finalizar"
+    return f"🛒 *YOUR ORDER*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\n{confirm_text}"
 
 # ========== FUNCIONES DE PEDIDOS (TICKETS) ==========
 async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: int, tipo_entrega: str = None, direccion: str = None, metodo_pago: str = None) -> dict:
     try:
         if not supabase:
-            return {"error": "Base de datos no conectada"}
+            return {"error": "Database not connected"}
         
         items_json = []
         for item in items:
@@ -285,7 +288,7 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
         if result.data:
             pedido = result.data[0]
             return {"numero": pedido.get("numero"), "id": pedido.get("id_pedido"), "estado": pedido.get("estado")}
-        return {"error": "No se pudo crear el pedido"}
+        return {"error": "Failed to create order"}
     except Exception as e:
         logger.error(f"Error guardando pedido: {e}")
         return {"error": str(e)}
@@ -293,7 +296,7 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
 # ========== ENVIAR MENÚ EN PDF ==========
 async def enviar_menu_pdf(to: str):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-        logger.error("WhatsApp no configurado para enviar PDF")
+        logger.error("WhatsApp not configured for PDF")
         return False
     
     pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
@@ -316,22 +319,22 @@ async def enviar_menu_pdf(to: str):
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=data)
         if response.status_code == 200:
-            logger.info(f"✅ Menú PDF enviado a {to}")
+            logger.info(f"✅ PDF menu sent to {to}")
             return True
         else:
-            logger.error(f"❌ Error enviando PDF: {response.text}")
+            logger.error(f"❌ Error sending PDF: {response.text}")
             return False
 
 # ========== PROCESAR ELIMINAR ==========
 async def process_remove_command(user_id: str, text: str, lang: str) -> str:
     text_lower = text.lower().strip()
-    remove_words = ['eliminar', 'elimina', 'quitar', 'borrar']
+    remove_words = ['eliminar', 'elimina', 'quitar', 'borrar', 'remove', 'delete']
     
     is_remove = any(text_lower.startswith(word) for word in remove_words)
     if not is_remove:
         return None
     
-    if 'todo' in text_lower or 'carrito' in text_lower:
+    if 'todo' in text_lower or 'all' in text_lower or 'carrito' in text_lower or 'cart' in text_lower:
         return await clear_cart(user_id, lang)
     
     resto = text_lower
@@ -368,28 +371,31 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
         pedido_estado[user_id]["tipo_entrega"] = "recoge"
         pedido_estado[user_id]["fase"] = "pago"
         total = sum(item["price"] for item in carts.get(user_id, []))
-        return f"✅ *Recogida en local*\n⏱️ Tiempo: 5-10 minutos\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
+        pickup_text = "✅ *Pickup at location*" if lang == 'english' else "✅ *Recogida en local*"
+        time_text = "⏱️ Time: 5-10 minutes" if lang == 'english' else "⏱️ Tiempo: 5-10 minutos"
+        return f"{pickup_text}\n{time_text}\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
     elif text == '2' or match_comando(text, 'domicilio'):
         pedido_estado[user_id]["tipo_entrega"] = "domicilio"
         pedido_estado[user_id]["fase"] = "direccion"
         return get_text(lang, 'address_request')
-    return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
+    return "❌ Invalid option. Type *1* (Pickup) or *2* (Delivery)."
 
 async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
     pedido_estado[user_id]["direccion"] = direccion
     pedido_estado[user_id]["fase"] = "pago"
     total = sum(item["price"] for item in carts.get(user_id, []))
-    return f"📍 Dirección guardada.\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
+    address_saved = "📍 Address saved." if lang == 'english' else "📍 Dirección guardada."
+    return f"{address_saved}\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     if text == '1' or match_comando(text, 'efectivo'):
-        metodo = "Efectivo"
+        metodo = "Cash" if lang == 'english' else "Efectivo"
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
     elif text == '2' or match_comando(text, 'transferencia'):
-        metodo = "Transferencia"
+        metodo = "Bank Transfer" if lang == 'english' else "Transferencia"
         pedido_estado[user_id]["metodo_pago"] = "transferencia"
     else:
-        return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
+        return "❌ Invalid option. Type *1* (Cash) or *2* (Transfer)."
     
     total = sum(item["price"] for item in carts.get(user_id, []))
     
@@ -415,11 +421,14 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
         carts[user_id] = []
     
     if "error" in resultado:
-        return f"❌ Error al guardar: {resultado['error']}"
+        return f"❌ Error saving order: {resultado['error']}"
     
     numero = resultado.get("numero", "???")
     tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
-    tiempo = "5-10 minutos" if tipo == "recoge" else "20-30 minutos"
+    if lang == 'english':
+        tiempo = "5-10 minutes" if tipo == "recoge" else "20-30 minutes"
+    else:
+        tiempo = "5-10 minutos" if tipo == "recoge" else "20-30 minutos"
     
     if user_id in pedido_estado:
         del pedido_estado[user_id]
@@ -432,7 +441,7 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
 async def webhook_verify(request: Request):
     params = request.query_params
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
-        logger.info("Webhook verificado")
+        logger.info("Webhook verified")
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     raise HTTPException(403, "Verification failed")
 
@@ -494,30 +503,36 @@ async def process_message(body: dict):
                             if user_id in pedido_estado:
                                 del pedido_estado[user_id]
                             response = LanguageDetector.get_welcome(lang)
-                        
-                        elif text_lower in ['menu', 'menú']:
-                            menu_text, _ = await get_restaurant_menu(client_id)
-                            await send_message(user_id, menu_text)
-                            await enviar_menu_pdf(user_id)
+                            await send_message(user_id, response)
+                            help_text = LanguageDetector.get_help(lang)
+                            await send_message(user_id, help_text)
                             response = None
                         
-                        elif text_lower in ['pedido', 'order', 'talab', 'طلب']:
+                        elif text_lower in ['menu', 'menú']:
+                            menu_text, _ = await get_restaurant_menu(client_id, lang)
+                            await send_message(user_id, menu_text)
+                            await enviar_menu_pdf(user_id)
+                            help_text = LanguageDetector.get_help(lang)
+                            await send_message(user_id, help_text)
+                            response = None
+                        
+                        elif text_lower in ['pedido', 'order', 'talab', 'طلب', 'cart']:
                             response = await get_cart(user_id, lang)
                         
-                        elif text_lower in ['confirmar', 'confirm', 't2kid', 'تأكيد']:
+                        elif text_lower in ['confirmar', 'confirm', 't2kid', 'تأكيد', 'checkout']:
                             if user_id in carts and carts[user_id]:
                                 response = await iniciar_entrega(user_id, lang)
                             else:
                                 response = get_text(lang, 'cart_empty')
                         
-                        elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardim', 'مساعدة']:
+                        elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardim', 'مساعدة', 'commands']:
                             response = LanguageDetector.get_help(lang)
                         
                         elif text_lower.isdigit():
                             response = await add_to_cart(user_id, int(text_lower), 1, client_id, lang)
                         
                         else:
-                            _, platos = await get_restaurant_menu(client_id)
+                            _, platos = await get_restaurant_menu(client_id, lang)
                             item_num, cantidad = parse_quantity_command(text, platos)
                             if item_num and cantidad:
                                 response = await add_to_cart(user_id, item_num, cantidad, client_id, lang)
@@ -532,7 +547,7 @@ async def process_message(body: dict):
 
 async def send_message(to: str, message: str):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-        logger.error("WhatsApp no configurado")
+        logger.error("WhatsApp not configured")
         return
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -562,14 +577,14 @@ async def version():
 @app.get("/api/restaurantes")
 async def get_restaurantes():
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     result = supabase.table("restaurantes").select("*").eq("is_active", True).execute()
     return {"restaurantes": result.data, "count": len(result.data)}
 
 @app.get("/api/platos/{client_id}")
 async def get_platos(client_id: str):
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
     platos = [{"id_plato": r["id"], "nombre": r["dish_name"], "precio": r["price"]} for r in result.data]
     return {"platos": platos, "count": len(platos)}
@@ -577,7 +592,7 @@ async def get_platos(client_id: str):
 @app.post("/api/platos")
 async def create_plato(item: dict):
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     data = {"client_id": item["client_id"], "dish_name": item["nombre"], "price": item["precio"], "description": item.get("descripcion", ""), "is_available": True}
     result = supabase.table("menu_items").insert(data).execute()
     if result.data:
@@ -588,11 +603,10 @@ async def create_plato(item: dict):
 async def get_menu(client_id: str):
     return await get_platos(client_id)
 
-# ========== ENDPOINTS DE PEDIDOS (TICKETS) ==========
 @app.get("/api/pedidos")
 async def get_pedidos(estado: str = None):
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     try:
         hoy = datetime.now().date().isoformat()
         query = supabase.table("pedidos").select("*").gte("created_at", hoy)
@@ -601,26 +615,26 @@ async def get_pedidos(estado: str = None):
         result = query.order("numero", desc=False).execute()
         return {"pedidos": result.data, "count": len(result.data)}
     except Exception as e:
-        logger.error(f"Error listando pedidos: {e}")
+        logger.error(f"Error listing orders: {e}")
         return {"pedidos": [], "count": 0, "error": str(e)}
 
 @app.get("/api/pedido/{numero}")
 async def get_pedido(numero: int):
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     try:
         result = supabase.table("pedidos").select("*").eq("numero", numero).execute()
         if not result.data:
-            raise HTTPException(404, f"Pedido #{numero} no encontrado")
+            raise HTTPException(404, f"Order #{numero} not found")
         return result.data[0]
     except Exception as e:
-        logger.error(f"Error obteniendo pedido: {e}")
+        logger.error(f"Error getting order: {e}")
         raise HTTPException(500, str(e))
 
 @app.get("/api/stats/diario")
 async def stats_diario():
     if not supabase:
-        raise HTTPException(500, "Supabase no configurado")
+        raise HTTPException(500, "Supabase not configured")
     try:
         hoy = datetime.now().date().isoformat()
         result = supabase.table("pedidos").select("*").gte("created_at", hoy).execute()
@@ -642,14 +656,14 @@ async def stats_diario():
 
 @app.on_event("startup")
 async def startup():
-    logger.info(f"🚀 Bot {VERSION} iniciando...")
+    logger.info(f"🚀 Bot {VERSION} starting...")
     await load_phone_mapping()
-    logger.info(f"✅ {len(LANGUAGES)} idiomas cargados: {list(LANGUAGES.keys())}")
+    logger.info(f"✅ {len(LANGUAGES)} languages loaded: {list(LANGUAGES.keys())}")
+    
     dashboard_path = "static/dashboard.html"
     if not os.path.exists(dashboard_path):
         os.makedirs("static", exist_ok=True)
-        with open(dashboard_path, "w") as f:
-            f.write('''<!DOCTYPE html>
+        html_content = """<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard - El Reducto</title>
@@ -669,14 +683,14 @@ h1{color:#22d3ee;margin-bottom:20px}
 </head>
 <body>
 <h1>📋 Dashboard - El Reducto</h1>
-<div class="flex"><button class="btn" onclick="cargarPedidos()">🔄 Actualizar</button>
+<div class="flex"><button class="btn" onclick="cargarPedidos()">🔄 Refresh</button>
 <select id="filtro" onchange="cargarPedidos()" style="background:#1e293b;color:white;padding:8px;border-radius:8px">
-<option value="">Todos</option><option value="nuevo">🆕 Nuevos</option>
-<option value="confirmado">✅ Confirmados</option>
-<option value="listo">🍽️ Listos</option>
-<option value="entregado">📦 Entregados</option>
+<option value="">All</option><option value="nuevo">🆕 New</option>
+<option value="confirmado">✅ Confirmed</option>
+<option value="listo">🍽️ Ready</option>
+<option value="entregado">📦 Delivered</option>
 </select></div>
-<div id="pedidos-container">Cargando...</div>
+<div id="pedidos-container">Loading...</div>
 <script>
 async function cargarPedidos(){
     const filtro=document.getElementById('filtro').value;
@@ -687,7 +701,7 @@ async function cargarPedidos(){
         const data=await res.json();
         const cont=document.getElementById('pedidos-container');
         if(!data.pedidos||data.pedidos.length===0){
-            cont.innerHTML='<div class="pedido">📭 No hay pedidos hoy.</div>';
+            cont.innerHTML='<div class="pedido">📭 No orders today.</div>';
             return;
         }
         cont.innerHTML=data.pedidos.map(p=>{
@@ -697,7 +711,7 @@ async function cargarPedidos(){
                 <span class="estado estado-${p.estado}">${p.estado.toUpperCase()}</span></div>
                 <div>${items.map(i=>`🍽️ ${i.cantidad||1}x ${i.name} — ${(i.price||0)*(i.cantidad||1)} MAD`).join('<br>')}</div>
                 <div class="total">💰 Total: ${p.total_mad} MAD</div>
-                <div>📞 ${p.cliente_telefono||p.id_cliente} | 🚚 ${p.tipo_entrega||'Recoge'} | 💳 ${p.metodo_pago||'Efectivo'}</div>
+                <div>📞 ${p.cliente_telefono||p.id_cliente} | 🚚 ${p.tipo_entrega||'Pickup'} | 💳 ${p.metodo_pago||'Cash'}</div>
             </div>`;
         }).join('');
     }catch(e){document.getElementById('pedidos-container').innerHTML='<div class="pedido">❌ Error</div>';}
@@ -706,8 +720,11 @@ cargarPedidos();
 setInterval(cargarPedidos,30000);
 </script>
 </body>
-</html>''')
-    logger.info(f"✅ Sistema multi-idioma listo. Bot {VERSION} funcionando.")
+</html>"""
+        with open(dashboard_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    
+    logger.info(f"✅ Multi-language system ready. Bot {VERSION} running.")
 
 if __name__ == "__main__":
     import uvicorn
