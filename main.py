@@ -353,6 +353,43 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     
     else:
         return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
+
+async def enviar_menu_pdf(to: str):
+    """Envía el menú en PDF por WhatsApp"""
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        logger.error("WhatsApp no configurado")
+        return False
+    
+    # URL del PDF (cámbiala según donde lo hayas subido)
+    pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
+    
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "document",
+        "document": {
+            "link": pdf_url,
+            "filename": "Menu_El_Reducto.pdf"
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            logger.info(f"✅ Menú PDF enviado a {to}")
+            return True
+        else:
+            logger.error(f"❌ Error enviando PDF: {response.text}")
+            return False
+elif text_lower == 'carta':
+    await enviar_menu_pdf(user_id)
+    response = "📄 Te envié el menú en PDF con todas las imágenes y descripciones."
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
 async def webhook_verify(request: Request):
