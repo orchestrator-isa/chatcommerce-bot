@@ -183,7 +183,7 @@ async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) 
     return f"✅ *{cantidad} x {nombre}* eliminado.\n💰 Total actual: {total} MAD"
 
 async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
-    if user_id not in carts or not carts[user_id]):
+    if user_id not in carts or not carts[user_id]:
         return "🛒 No hay nada en tu carrito."
     
     if item_index < 1 or item_index > len(carts[user_id]):
