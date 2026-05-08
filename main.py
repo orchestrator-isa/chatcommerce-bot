@@ -2,6 +2,7 @@
 import os
 import logging
 import re
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client
@@ -9,7 +10,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "5.0-ROBUSTO"
+VERSION = "6.0-TICKETS"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -31,22 +32,6 @@ carts: Dict[str, List[dict]] = {}
 user_lang: Dict[str, str] = {}
 pedido_estado: Dict[str, dict] = {}
 
-# ========== SINÓNIMOS PARA COMANDOS (ROBUSTO) ==========
-SINONIMOS = {
-    'recoge': ['recoge', 'recoger', 'recojo', 'local', 'tienda', 'presencial', 'recogida', 'en local'],
-    'domicilio': ['domicilio', 'envío', 'entrega', 'casa', 'delivery', 'reparto', 'a domicilio', 'a casa'],
-    'efectivo': ['efectivo', 'cash', 'dinero', 'pago en efectivo', 'contra reembolso', 'efectivo'],
-    'transferencia': ['transferencia', 'transfer', 'bancaria', 'tarjeta', 'bizum', 'ingreso', 'transferencia bancaria']
-}
-
-def match_comando(text: str, comando: str) -> bool:
-    """Verifica si el texto coincide con algún sinónimo del comando"""
-    text_lower = text.lower().strip()
-    for sinonimo in SINONIMOS[comando]:
-        if sinonimo in text_lower:
-            return True
-    return False
-
 # ========== MAPEO DE TELÉFONOS ==========
 phone_to_restaurant: Dict[str, str] = {}
 
@@ -65,6 +50,21 @@ async def load_phone_mapping():
         logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e:
         logger.error(f"Error mapeo: {e}")
+
+# ========== SINÓNIMOS PARA COMANDOS ==========
+SINONIMOS = {
+    'recoge': ['recoge', 'recoger', 'recojo', 'local', 'tienda', 'presencial'],
+    'domicilio': ['domicilio', 'envío', 'entrega', 'casa', 'delivery'],
+    'efectivo': ['efectivo', 'cash', 'dinero'],
+    'transferencia': ['transferencia', 'transfer', 'bancaria']
+}
+
+def match_comando(text: str, comando: str) -> bool:
+    text_lower = text.lower().strip()
+    for sinonimo in SINONIMOS[comando]:
+        if sinonimo in text_lower:
+            return True
+    return False
 
 # ========== NLP: DETECCIÓN DE IDIOMA ==========
 class LanguageDetector:
@@ -89,8 +89,8 @@ class LanguageDetector:
     }
     
     HELP = {
-        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: "3 coca"\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *ELIMINAR TODO* - Vaciar\n• *CONFIRMAR* - Finalizar pedido',
-        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan "3 coca"\n• *TALAB* - Chouf talab\n• *ELIMINAR X* - Hedi flakla\n• *ELIMINAR TODO* - Fergi talab\n• *CONFIRMAR* - Kmml talab'
+        'spanish': '📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: "3 coca"\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *CONFIRMAR* - Finalizar',
+        'darija_latin': '📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan "3 coca"\n• *TALAB* - Chouf talab\n• *ELIMINAR X* - Hedi flakla\n• *CONFIRMAR* - Kmml talab'
     }
 
     @classmethod
@@ -149,8 +149,7 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
             carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
         
         total = sum(item["price"] for item in carts[user_id])
-        
-        return f"✅ *{cantidad} x {selected['dish_name']}* añadido a tu pedido.\n💰 Total parcial: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+        return f"✅ *{cantidad} x {selected['dish_name']}* añadido.\n💰 Total parcial: {total} MAD"
     except Exception as e:
         logger.error(f"Error carrito: {e}")
         return "❌ Error al añadir"
@@ -176,26 +175,23 @@ async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) 
     total = sum(item["price"] for item in carts[user_id])
     cantidad = len(eliminados)
     nombre = eliminados[0]["name"]
-    
-    return f"✅ *{cantidad} x {nombre}* eliminado del carrito.\n💰 Total actual: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+    return f"✅ *{cantidad} x {nombre}* eliminado.\n💰 Total actual: {total} MAD"
 
 async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
     if user_id not in carts or not carts[user_id]:
         return "🛒 No hay nada en tu carrito."
     
     if item_index < 1 or item_index > len(carts[user_id]):
-        items_count = len(carts[user_id])
-        return f"❌ Número inválido. El carrito tiene {items_count} platos."
+        return f"❌ Número inválido. El carrito tiene {len(carts[user_id])} platos."
     
     removed = carts[user_id].pop(item_index - 1)
     total = sum(item["price"] for item in carts[user_id])
-    
-    return f"✅ *{removed['name']}* eliminado del carrito.\n💰 Total actual: {total} MAD\n\nEscribe *PEDIDO* para ver tu carrito."
+    return f"✅ *{removed['name']}* eliminado.\n💰 Total actual: {total} MAD"
 
 async def clear_cart(user_id: str, lang: str) -> str:
     if user_id in carts:
         carts[user_id] = []
-        return "🗑️ *Carrito vaciado* completamente.\n\nEscribe *MENU* para ver los platos."
+        return "🗑️ *Carrito vaciado* completamente."
     return "🛒 Tu carrito ya está vacío."
 
 async def get_cart(user_id: str, lang: str) -> str:
@@ -219,10 +215,55 @@ async def get_cart(user_id: str, lang: str) -> str:
             item_lines.append(f"• {name} — {data['price']} MAD")
     
     items_text = "\n".join(item_lines)
-    
-    return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para continuar con la entrega.\n\n✍️ Para eliminar un plato: *ELIMINAR 1* (por número) o *ELIMINAR TÉ* (por nombre)"
+    return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar."
 
-# ========== PROCESAR COMANDO ELIMINAR ==========
+# ========== FUNCIONES DE PEDIDOS (TICKETS) ==========
+async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: int, tipo_entrega: str = None, direccion: str = None, metodo_pago: str = None) -> dict:
+    """Guarda el pedido en Supabase y devuelve el número de ticket"""
+    try:
+        if not supabase:
+            return {"error": "Base de datos no conectada"}
+        
+        # Formatear items para JSONB
+        items_json = []
+        for item in items:
+            items_json.append({
+                "name": item["name"],
+                "price": item["price"],
+                "cantidad": item.get("cantidad", 1)
+            })
+        
+        data = {
+            "cliente_telefono": user_id,
+            "cliente_nombre": cliente_nombre,
+            "items": items_json,
+            "total": total,
+            "estado": "nuevo",
+            "tipo_entrega": tipo_entrega,
+            "direccion": direccion,
+            "metodo_pago": metodo_pago,
+            "pagado": False
+        }
+        
+        result = supabase.table("pedidos").insert(data).execute()
+        
+        if result.data:
+            pedido = result.data[0]
+            return {"numero": pedido["numero"], "id": pedido["id"], "estado": pedido["estado"]}
+        return {"error": "No se pudo crear el pedido"}
+    except Exception as e:
+        logger.error(f"Error guardando pedido: {e}")
+        return {"error": str(e)}
+
+async def obtener_pedido(numero: int) -> dict:
+    try:
+        result = supabase.table("pedidos").select("*").eq("numero", numero).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.error(f"Error obteniendo pedido: {e}")
+        return None
+
+# ========== PROCESAR ELIMINAR ==========
 async def process_remove_command(user_id: str, text: str, lang: str) -> str:
     text_lower = text.lower().strip()
     remove_words = ['eliminar', 'elimina', 'quitar', 'borrar']
@@ -231,7 +272,7 @@ async def process_remove_command(user_id: str, text: str, lang: str) -> str:
     if not is_remove:
         return None
     
-    if 'todo' in text_lower or 'carrito' in text_lower or 'todos' in text_lower:
+    if 'todo' in text_lower or 'carrito' in text_lower:
         return await clear_cart(user_id, lang)
     
     resto = text_lower
@@ -242,154 +283,93 @@ async def process_remove_command(user_id: str, text: str, lang: str) -> str:
     
     if resto.isdigit():
         return await remove_from_cart_by_index(user_id, int(resto), lang)
-    
     if resto:
         return await remove_from_cart_by_name(user_id, resto, lang)
-    
     return None
 
 # ========== PROCESAR CANTIDAD ==========
 def parse_quantity_command(text: str, platos: List[dict]) -> tuple:
-    text_lower = text.lower().strip()
-    match = re.match(r'(\d+)\s+(.+)', text_lower)
+    match = re.match(r'(\d+)\s+(.+)', text.lower().strip())
     if not match:
         return None, None
-    
     cantidad = int(match.group(1))
     nombre_buscar = match.group(2).strip()
-    
     for i, plato in enumerate(platos, 1):
         if nombre_buscar in plato['dish_name'].lower():
             return i, cantidad
-    
     return None, None
 
-# ========== FASES DE ENTREGA Y PAGO (ROBUSTO CON SINÓNIMOS) ==========
-
+# ========== PROCESAR CONFIRMACIÓN ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
     pedido_estado[user_id] = {"fase": "entrega"}
     return "🚚 *Tipo de entrega*\n\n• *1* - Recoge en local\n• *2* - Envío a domicilio\n\nEscribe el número de tu opción:"
 
 async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
-    text_lower = text.lower().strip()
-    
-    if text_lower == '1' or text_lower == 'recoge' or text_lower == 'local':
+    if text == '1' or match_comando(text, 'recoge'):
         pedido_estado[user_id]["tipo_entrega"] = "recoge"
         pedido_estado[user_id]["fase"] = "pago"
         total = sum(item["price"] for item in carts.get(user_id, []))
         return f"✅ *Recogida en local*\n⏱️ Tiempo: 5-10 minutos\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia\n\nEscribe el número de tu opción:"
-    
-    elif text_lower == '2' or text_lower == 'domicilio' or text_lower == 'envío':
+    elif text == '2' or match_comando(text, 'domicilio'):
         pedido_estado[user_id]["tipo_entrega"] = "domicilio"
         pedido_estado[user_id]["fase"] = "direccion"
         return "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:"
-    
-    else:
-        return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
+    return "❌ Opción no válida. Escribe *1* (Recoge) o *2* (Domicilio)."
+
+async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
+    pedido_estado[user_id]["direccion"] = direccion
+    pedido_estado[user_id]["fase"] = "pago"
+    total = sum(item["price"] for item in carts.get(user_id, []))
+    return f"📍 Dirección guardada.\n\n💰 Total: {total} MAD\n\n💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia\n\nEscribe el número de tu opción:"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
-    text_lower = text.lower().strip()
-    
-    if text_lower == '1' or text_lower == 'efectivo' or text_lower == 'cash':
+    if text == '1' or match_comando(text, 'efectivo'):
         metodo = "Efectivo"
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
-        total = sum(item["price"] for item in carts.get(user_id, []))
-        
-        # Limpiar carrito
-        if user_id in carts:
-            carts[user_id] = []
-        
-        tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
-        direccion = pedido_estado[user_id].get("direccion", "").strip()
-        
-        # Construir mensaje sin f-strings complejos
-        mensaje = f"✅ *¡PEDIDO CONFIRMADO!*\n\n"
-        mensaje += f"💰 Total: {total} MAD\n"
-        mensaje += f"💳 Método: {metodo}\n"
-        
-        if tipo == "recoge":
-            mensaje += "📍 Recogida en local\n"
-            mensaje += "⏱️ Tiempo estimado: 5-10 minutos\n"
-        else:
-            mensaje += f"📍 Dirección: {direccion}\n"
-            mensaje += "⏱️ Tiempo estimado: 20-30 minutos\n"
-        
-        mensaje += "\n📋 Tu pedido ha sido enviado a la cocina.\n\n"
-        mensaje += "¡Gracias por tu compra! 🙏\n\n"
-        mensaje += "Escribe *HOLA* para un nuevo pedido."
-        
-        # Limpiar estado
-        if user_id in pedido_estado:
-            del pedido_estado[user_id]
-        
-        return mensaje
-    
-    elif text_lower == '2' or text_lower == 'transferencia' or text_lower == 'transfer':
+    elif text == '2' or match_comando(text, 'transferencia'):
         metodo = "Transferencia"
         pedido_estado[user_id]["metodo_pago"] = "transferencia"
-        total = sum(item["price"] for item in carts.get(user_id, []))
-        
-        if user_id in carts:
-            carts[user_id] = []
-        
-        tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
-        
-        mensaje = f"✅ *¡PEDIDO CONFIRMADO!*\n\n"
-        mensaje += f"💰 Total: {total} MAD\n"
-        mensaje += f"💳 Método: {metodo}\n"
-        
-        if tipo == "recoge":
-            mensaje += "📍 Recogida en local\n"
-        else:
-            mensaje += "📍 Envío a domicilio\n"
-        
-        mensaje += "\n📋 Enviaremos los datos bancarios por separado.\n\n"
-        mensaje += "¡Gracias por tu compra! 🙏"
-        
-        if user_id in pedido_estado:
-            del pedido_estado[user_id]
-        
-        return mensaje
-    
     else:
         return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
+    
+    # Guardar pedido en Supabase
+    total = sum(item["price"] for item in carts.get(user_id, []))
+    
+    # Agrupar items
+    items_dict = {}
+    for item in carts.get(user_id, []):
+        name = item["name"]
+        if name not in items_dict:
+            items_dict[name] = {"name": name, "price": item["price"], "cantidad": 0}
+        items_dict[name]["cantidad"] += 1
+    items_list = [{"name": v["name"], "price": v["price"], "cantidad": v["cantidad"]} for v in items_dict.values()]
+    
+    resultado = await guardar_pedido(
+        user_id=user_id,
+        cliente_nombre=None,
+        items=items_list,
+        total=total,
+        tipo_entrega=pedido_estado[user_id].get("tipo_entrega"),
+        direccion=pedido_estado[user_id].get("direccion"),
+        metodo_pago=metodo
+    )
+    
+    # Limpiar
+    if user_id in carts:
+        carts[user_id] = []
+    
+    if "error" in resultado:
+        return f"❌ Error al guardar: {resultado['error']}"
+    
+    numero = resultado["numero"]
+    tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
+    tiempo = "5-10 minutos" if tipo == "recoge" else "20-30 minutos"
+    
+    if user_id in pedido_estado:
+        del pedido_estado[user_id]
+    
+    return f"✅ *¡PEDIDO CONFIRMADO!*\n\n📋 *Número de pedido: #{numero}*\n💰 Total: {total} MAD\n💳 Método: {metodo}\n⏱️ Tiempo: {tiempo}\n\n📋 Tu pedido #{numero} ha sido enviado a la cocina.\n\n¡Gracias por tu compra! 🙏\n\nEscribe *HOLA* para un nuevo pedido."
 
-async def enviar_menu_pdf(to: str):
-    """Envía el menú en PDF por WhatsApp"""
-    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-        logger.error("WhatsApp no configurado")
-        return False
-    
-    # URL del PDF (cámbiala según donde lo hayas subido)
-    pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
-    
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to,
-        "type": "document",
-        "document": {
-            "link": pdf_url,
-            "filename": "Menu_El_Reducto.pdf"
-        }
-    }
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=data)
-        if response.status_code == 200:
-            logger.info(f"✅ Menú PDF enviado a {to}")
-            return True
-        else:
-            logger.error(f"❌ Error enviando PDF: {response.text}")
-            return False
-elif text_lower == 'carta':
-    await enviar_menu_pdf(user_id)
-    response = "📄 Te envié el menú en PDF con todas las imágenes y descripciones."
 # ========== WHATSAPP WEBHOOK ==========
 @app.get("/api/whatsapp/webhook")
 async def webhook_verify(request: Request):
@@ -428,15 +408,14 @@ async def process_message(body: dict):
                         
                         lang = LanguageDetector.detect(text)
                         user_lang[user_id] = lang
-                        
                         logger.info(f"📨 {user_id} [{lang}]: {text[:50]}")
                         
-                        # Verificar estado del pedido
+                        # Estado del pedido
                         estado = pedido_estado.get(user_id, {})
                         fase = estado.get("fase", "inicio")
                         
                         if fase == "entrega":
-                            response = await procesar_entrega(user_id, text, lang)
+                            response = await procesar_entrega(user_id, text_lower, lang)
                             await send_message(user_id, response)
                             continue
                         elif fase == "direccion":
@@ -444,21 +423,19 @@ async def process_message(body: dict):
                             await send_message(user_id, response)
                             continue
                         elif fase == "pago":
-                            response = await procesar_pago(user_id, text, lang)
+                            response = await procesar_pago(user_id, text_lower, lang)
                             await send_message(user_id, response)
                             continue
                         
-                        # Comandos de eliminación
-                        remove_response = await process_remove_command(user_id, text, lang)
+                        # Comandos
+                        remove_response = await process_remove_command(user_id, text_lower, lang)
                         if remove_response:
                             await send_message(user_id, remove_response)
                             continue
                         
-                        # Comandos principales
                         if text_lower in ['hola', 'salam', 'hello', 'bonjour', 'hallo', 'merhaba', 'سلام']:
                             if user_id in carts:
                                 carts[user_id] = []
-                                logger.info(f"🗑️ Carrito limpiado para {user_id}")
                             if user_id in pedido_estado:
                                 del pedido_estado[user_id]
                             response = LanguageDetector.get_welcome(lang)
@@ -467,10 +444,10 @@ async def process_message(body: dict):
                             menu_text, _ = await get_restaurant_menu(client_id)
                             response = menu_text
                         
-                        elif text_lower in ['pedido', 'order', 'command', 'talab', 'طلب']:
+                        elif text_lower in ['pedido', 'order', 'talab', 'طلب']:
                             response = await get_cart(user_id, lang)
                         
-                        elif text_lower in ['confirmar', 'confirm', 'confirmer', 't2kid', 'تأكيد']:
+                        elif text_lower in ['confirmar', 'confirm', 't2kid', 'تأكيد']:
                             if user_id in carts and carts[user_id]:
                                 response = await iniciar_entrega(user_id, lang)
                             else:
@@ -505,7 +482,7 @@ async def send_message(to: str, message: str):
     async with httpx.AsyncClient() as client:
         await client.post(url, headers=headers, json=data)
 
-# ========== API ENDPOINTS ==========
+# ========== API ENDPOINTS (Dashboard) ==========
 @app.get("/")
 async def root():
     return {"status": "ok", "version": VERSION, "service": "Orquestrator ISA"}
@@ -522,7 +499,7 @@ async def health():
 
 @app.get("/api/version")
 async def version():
-    return {"version": VERSION, "features": ["Sinonimos", "EliminarPorNombre", "EliminarPorNumero", "Cantidades", "Entrega", "Pago"]}
+    return {"version": VERSION, "features": ["Tickets", "MultiIdioma", "Carrito", "Entrega", "Pago"]}
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
@@ -552,6 +529,61 @@ async def create_plato(item: dict):
 @app.get("/api/menu/{client_id}")
 async def get_menu(client_id: str):
     return await get_platos(client_id)
+
+# ========== ENDPOINTS DE PEDIDOS (TICKETS) ==========
+@app.get("/api/pedidos")
+async def get_pedidos(estado: str = None):
+    """Lista pedidos del día para el dashboard del restaurante"""
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
+    try:
+        hoy = datetime.now().date().isoformat()
+        query = supabase.table("pedidos").select("*").gte("created_at", hoy)
+        if estado:
+            query = query.eq("estado", estado)
+        result = query.order("numero", desc=False).execute()
+        return {"pedidos": result.data, "count": len(result.data)}
+    except Exception as e:
+        logger.error(f"Error listando pedidos: {e}")
+        return {"pedidos": [], "count": 0, "error": str(e)}
+
+@app.get("/api/pedido/{numero}")
+async def get_pedido(numero: int):
+    """Obtener un pedido específico por número"""
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
+    try:
+        result = supabase.table("pedidos").select("*").eq("numero", numero).execute()
+        if not result.data:
+            raise HTTPException(404, f"Pedido #{numero} no encontrado")
+        return result.data[0]
+    except Exception as e:
+        logger.error(f"Error obteniendo pedido: {e}")
+        raise HTTPException(500, str(e))
+
+@app.get("/api/stats/diario")
+async def stats_diario():
+    """Estadísticas del día para el dashboard"""
+    if not supabase:
+        raise HTTPException(500, "Supabase no configurado")
+    try:
+        hoy = datetime.now().date().isoformat()
+        result = supabase.table("pedidos").select("*").gte("created_at", hoy).execute()
+        pedidos = result.data
+        
+        total_ventas = sum(p["total"] for p in pedidos)
+        pedidos_por_estado = {estado: len([p for p in pedidos if p["estado"] == estado]) 
+                              for estado in ["nuevo", "confirmado", "listo", "entregado", "cancelado"]}
+        
+        return {
+            "total_pedidos": len(pedidos),
+            "total_ventas": total_ventas,
+            "pedidos_por_estado": pedidos_por_estado,
+            "pedidos_recientes": pedidos[-10:]
+        }
+    except Exception as e:
+        logger.error(f"Error stats: {e}")
+        return {"error": str(e)}
 
 @app.on_event("startup")
 async def startup():
