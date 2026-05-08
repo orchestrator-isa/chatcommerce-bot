@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard - El Reducto</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+        h1 { color: #22d3ee; margin-bottom: 20px; }
+        .pedido { background: #1e293b; border-radius: 12px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #22d3ee; }
+        .pedido.nuevo { border-left-color: #fbbf24; }
+        .pedido.confirmado { border-left-color: #4ade80; }
+        .pedido.listo { border-left-color: #22d3ee; }
+        .pedido.entregado { border-left-color: #94a3b8; }
+        .numero { font-size: 1.3rem; font-weight: bold; color: #22d3ee; }
+        .estado { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; margin-left: 10px; }
+        .estado-nuevo { background: #fbbf24; color: #0f172a; }
+        .estado-confirmado { background: #4ade80; color: #0f172a; }
+        .estado-listo { background: #22d3ee; color: #0f172a; }
+        .total { font-size: 1.2rem; font-weight: bold; color: #fbbf24; margin-top: 10px; }
+        .btn { background: #0891b2; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; margin-top: 10px; margin-right: 10px; }
+        .btn:hover { background: #06b6d4; }
+        .refresh { background: #334155; margin-bottom: 20px; }
+        .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <h1>📋 Dashboard - El Reducto</h1>
+    <div class="flex">
+        <button class="btn refresh" onclick="cargarPedidos()">🔄 Actualizar</button>
+        <select id="filtro" onchange="cargarPedidos()" style="background:#1e293b; color:white; padding:8px; border-radius:8px; border:1px solid #334155;">
+            <option value="">Todos los estados</option>
+            <option value="nuevo">🆕 Nuevos</option>
+            <option value="confirmado">✅ Confirmados</option>
+            <option value="listo">🍽️ Listos</option>
+            <option value="entregado">📦 Entregados</option>
+        </select>
+    </div>
+    <div id="pedidos-container" style="margin-top: 20px;">Cargando...</div>
+
+    <script>
+        async function cargarPedidos() {
+            const filtro = document.getElementById('filtro').value;
+            let url = '/api/pedidos';
+            if (filtro) url += `?estado=${filtro}`;
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                const container = document.getElementById('pedidos-container');
+                
+                if (!data.pedidos || data.pedidos.length === 0) {
+                    container.innerHTML = '<div class="pedido">📭 No hay pedidos aún.</div>';
+                    return;
+                }
+                
+                container.innerHTML = data.pedidos.map(p => `
+                    <div class="pedido ${p.estado}">
+                        <div class="flex" style="justify-content: space-between;">
+                            <div>
+                                <span class="numero">#${p.numero}</span>
+                                <span class="estado estado-${p.estado}">${p.estado.toUpperCase()}</span>
+                            </div>
+                            <div style="color:#94a3b8; font-size:0.8rem;">${new Date(p.created_at).toLocaleTimeString()}</div>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            ${p.items_json ? p.items_json.map(i => `<div>🍽️ ${i.cantidad}x ${i.name} — ${i.price * i.cantidad} MAD</div>`).join('') : 'Sin items'}
+                        </div>
+                        <div class="total">💰 Total: ${p.total_mad || p.total} MAD</div>
+                        <div style="color:#94a3b8; font-size:0.8rem; margin-top:8px;">
+                            📞 ${p.cliente_telefono || p.id_cliente} | 
+                            🚚 ${p.tipo_entrega || 'No especificado'} | 
+                            💳 ${p.metodo_pago || 'Efectivo'}
+                        </div>
+                        <div class="flex" style="margin-top: 10px;">
+                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'confirmado')">✅ Confirmar</button>
+                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'listo')">🍽️ Marcar Listo</button>
+                            <button class="btn" onclick="cambiarEstado(${p.numero}, 'entregado')">📦 Entregar</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                document.getElementById('pedidos-container').innerHTML = '<div class="pedido">❌ Error al cargar pedidos</div>';
+            }
+        }
+        
+        async function cambiarEstado(numero, nuevoEstado) {
+            try {
+                const res = await fetch(`/api/pedido/${numero}/estado?estado=${nuevoEstado}`, { method: 'PUT' });
+                if (res.ok) {
+                    cargarPedidos();
+                } else {
+                    alert('Error al actualizar estado');
+                }
+            } catch (error) {
+                alert('Error de conexión');
+            }
+        }
+        
+        cargarPedidos();
+        setInterval(cargarPedidos, 30000); // Actualizar cada 30 segundos
+    </script>
+</body>
+</html>
