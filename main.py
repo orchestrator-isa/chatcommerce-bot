@@ -10,6 +10,7 @@ from supabase import create_client
 from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
+import uuid
 
 VERSION = "6.1-TICKETS-PDF"
 
@@ -223,6 +224,7 @@ async def get_cart(user_id: str, lang: str) -> str:
     return f"🛒 *TU PEDIDO*\n\n{items_text}\n\n💰 *TOTAL: {total} MAD*\n\nEscribe *CONFIRMAR* para finalizar."
 
 # ========== FUNCIONES DE PEDIDOS (TICKETS) ==========
+
 async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: int, tipo_entrega: str = None, direccion: str = None, metodo_pago: str = None) -> dict:
     try:
         if not supabase:
@@ -237,8 +239,8 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
             })
         
         data = {
-            "id_cliente": user_id,
-            "cliente_telefono": user_id,
+            "id_cliente": str(uuid.uuid4()),  # ← UUID aleatorio para la FK
+            "cliente_telefono": user_id,      # ← número de teléfono real
             "items_json": items_json,
             "total_mad": total,
             "estado": "nuevo",
