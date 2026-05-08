@@ -5,12 +5,13 @@ import re
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from supabase import create_client
 from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "6.0-TICKETS"
+VERSION = "6.1-TICKETS-PDF"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -26,6 +27,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABAS
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# ========== ARCHIVOS ESTÁTICOS (Dashboard) ==========
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ========== CARITOS Y ESTADOS ==========
 carts: Dict[str, List[dict]] = {}
@@ -178,7 +183,7 @@ async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) 
     return f"✅ *{cantidad} x {nombre}* eliminado.\n💰 Total actual: {total} MAD"
 
 async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
-    if user_id not in carts or not carts[user_id]:
+    if user_id not in carts or not carts[user_id]):
         return "🛒 No hay nada en tu carrito."
     
     if item_index < 1 or item_index > len(carts[user_id]):
@@ -219,12 +224,10 @@ async def get_cart(user_id: str, lang: str) -> str:
 
 # ========== FUNCIONES DE PEDIDOS (TICKETS) ==========
 async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: int, tipo_entrega: str = None, direccion: str = None, metodo_pago: str = None) -> dict:
-    """Guarda el pedido en Supabase y devuelve el número de ticket"""
     try:
         if not supabase:
             return {"error": "Base de datos no conectada"}
         
-        # Formatear items para JSONB
         items_json = []
         for item in items:
             items_json.append({
@@ -234,35 +237,60 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
             })
         
         data = {
-            "id_cliente": user_id,  # en lugar de cliente_telefono
-            "cliente_telefono": user_id,  # ambos para compatibilidad
-            "items_json": items_json,  # en lugar de items
-            "total_mad": total,  # en lugar de total
+            "id_cliente": user_id,
+            "cliente_telefono": user_id,
+            "items_json": items_json,
+            "total_mad": total,
             "estado": "nuevo",
             "tipo_entrega": tipo_entrega,
             "direccion": direccion,
             "metodo_pago": metodo_pago,
             "pagado": False,
-            "fecha_creacion": "now()"
+            "fecha_creacion": datetime.now().isoformat()
         }
         
         result = supabase.table("pedidos").insert(data).execute()
         
         if result.data:
             pedido = result.data[0]
-            return {"numero": pedido["numero"], "id": pedido["id"], "estado": pedido["estado"]}
+            return {"numero": pedido.get("numero"), "id": pedido.get("id_pedido"), "estado": pedido.get("estado")}
         return {"error": "No se pudo crear el pedido"}
     except Exception as e:
         logger.error(f"Error guardando pedido: {e}")
         return {"error": str(e)}
 
-async def obtener_pedido(numero: int) -> dict:
-    try:
-        result = supabase.table("pedidos").select("*").eq("numero", numero).execute()
-        return result.data[0] if result.data else None
-    except Exception as e:
-        logger.error(f"Error obteniendo pedido: {e}")
-        return None
+# ========== ENVIAR MENÚ EN PDF ==========
+async def enviar_menu_pdf(to: str):
+    """Envía el menú en PDF por WhatsApp"""
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        logger.error("WhatsApp no configurado para enviar PDF")
+        return False
+    
+    pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
+    
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "document",
+        "document": {
+            "link": pdf_url,
+            "filename": "Menu_El_Reducto.pdf"
+        }
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            logger.info(f"✅ Menú PDF enviado a {to}")
+            return True
+        else:
+            logger.error(f"❌ Error enviando PDF: {response.text}")
+            return False
 
 # ========== PROCESAR ELIMINAR ==========
 async def process_remove_command(user_id: str, text: str, lang: str) -> str:
@@ -333,10 +361,8 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
     else:
         return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
     
-    # Guardar pedido en Supabase
     total = sum(item["price"] for item in carts.get(user_id, []))
     
-    # Agrupar items
     items_dict = {}
     for item in carts.get(user_id, []):
         name = item["name"]
@@ -355,14 +381,13 @@ async def procesar_pago(user_id: str, text: str, lang: str) -> str:
         metodo_pago=metodo
     )
     
-    # Limpiar
     if user_id in carts:
         carts[user_id] = []
     
     if "error" in resultado:
         return f"❌ Error al guardar: {resultado['error']}"
     
-    numero = resultado["numero"]
+    numero = resultado.get("numero", "???")
     tipo = pedido_estado[user_id].get("tipo_entrega", "recoge")
     tiempo = "5-10 minutos" if tipo == "recoge" else "20-30 minutos"
     
@@ -411,7 +436,6 @@ async def process_message(body: dict):
                         user_lang[user_id] = lang
                         logger.info(f"📨 {user_id} [{lang}]: {text[:50]}")
                         
-                        # Estado del pedido
                         estado = pedido_estado.get(user_id, {})
                         fase = estado.get("fase", "inicio")
                         
@@ -428,7 +452,6 @@ async def process_message(body: dict):
                             await send_message(user_id, response)
                             continue
                         
-                        # Comandos
                         remove_response = await process_remove_command(user_id, text_lower, lang)
                         if remove_response:
                             await send_message(user_id, remove_response)
@@ -443,7 +466,9 @@ async def process_message(body: dict):
                         
                         elif text_lower in ['menu', 'menú']:
                             menu_text, _ = await get_restaurant_menu(client_id)
-                            response = menu_text
+                            await send_message(user_id, menu_text)
+                            await enviar_menu_pdf(user_id)
+                            response = None
                         
                         elif text_lower in ['pedido', 'order', 'talab', 'طلب']:
                             response = await get_cart(user_id, lang)
@@ -468,7 +493,8 @@ async def process_message(body: dict):
                             else:
                                 response = LanguageDetector.get_help(lang)
                         
-                        await send_message(user_id, response)
+                        if response:
+                            await send_message(user_id, response)
                         
     except Exception as e:
         logger.error(f"Error procesando: {e}")
@@ -483,16 +509,7 @@ async def send_message(to: str, message: str):
     async with httpx.AsyncClient() as client:
         await client.post(url, headers=headers, json=data)
 
-sed -i 's/from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks/from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks\nfrom fastapi.staticfiles import StaticFiles/' main.py
-
-# Añadir el mount después de crear app
-sed -i '/app = FastAPI/a\
-\
-# Servir archivos estáticos (dashboard)\
-os.makedirs("static", exist_ok=True)\
-app.mount("/static", StaticFiles(directory="static"), name="static")' main.py
-
-# ========== API ENDPOINTS (Dashboard) ==========
+# ========== API ENDPOINTS ==========
 @app.get("/")
 async def root():
     return {"status": "ok", "version": VERSION, "service": "Orquestrator ISA"}
@@ -509,7 +526,7 @@ async def health():
 
 @app.get("/api/version")
 async def version():
-    return {"version": VERSION, "features": ["Tickets", "MultiIdioma", "Carrito", "Entrega", "Pago"]}
+    return {"version": VERSION, "features": ["Tickets", "PDF", "MultiIdioma", "Carrito", "Entrega", "Pago"]}
 
 @app.get("/api/restaurantes")
 async def get_restaurantes():
@@ -543,12 +560,11 @@ async def get_menu(client_id: str):
 # ========== ENDPOINTS DE PEDIDOS (TICKETS) ==========
 @app.get("/api/pedidos")
 async def get_pedidos(estado: str = None):
-    """Lista pedidos del día para el dashboard del restaurante"""
     if not supabase:
         raise HTTPException(500, "Supabase no configurado")
     try:
         hoy = datetime.now().date().isoformat()
-        query = supabase.table("pedidos").select("*").gte("created_at", hoy)
+        query = supabase.table("pedidos").select("*").gte("fecha_creacion", hoy)
         if estado:
             query = query.eq("estado", estado)
         result = query.order("numero", desc=False).execute()
@@ -559,7 +575,6 @@ async def get_pedidos(estado: str = None):
 
 @app.get("/api/pedido/{numero}")
 async def get_pedido(numero: int):
-    """Obtener un pedido específico por número"""
     if not supabase:
         raise HTTPException(500, "Supabase no configurado")
     try:
@@ -573,16 +588,15 @@ async def get_pedido(numero: int):
 
 @app.get("/api/stats/diario")
 async def stats_diario():
-    """Estadísticas del día para el dashboard"""
     if not supabase:
         raise HTTPException(500, "Supabase no configurado")
     try:
         hoy = datetime.now().date().isoformat()
-        result = supabase.table("pedidos").select("*").gte("created_at", hoy).execute()
+        result = supabase.table("pedidos").select("*").gte("fecha_creacion", hoy).execute()
         pedidos = result.data
         
-        total_ventas = sum(p["total"] for p in pedidos)
-        pedidos_por_estado = {estado: len([p for p in pedidos if p["estado"] == estado]) 
+        total_ventas = sum(p.get("total_mad", 0) for p in pedidos)
+        pedidos_por_estado = {estado: len([p for p in pedidos if p.get("estado") == estado]) 
                               for estado in ["nuevo", "confirmado", "listo", "entregado", "cancelado"]}
         
         return {
@@ -599,6 +613,68 @@ async def stats_diario():
 async def startup():
     logger.info(f"🚀 Bot {VERSION} iniciando...")
     await load_phone_mapping()
+    # Crear dashboard.html si no existe
+    dashboard_path = "static/dashboard.html"
+    if not os.path.exists(dashboard_path):
+        os.makedirs("static", exist_ok=True)
+        with open(dashboard_path, "w") as f:
+            f.write('''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard - El Reducto</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:20px}
+h1{color:#22d3ee;margin-bottom:20px}
+.pedido{background:#1e293b;border-radius:12px;padding:15px;margin-bottom:15px;border-left:4px solid #22d3ee}
+.pedido.nuevo{border-left-color:#fbbf24}
+.numero{font-size:1.3rem;font-weight:bold;color:#22d3ee}
+.estado{display:inline-block;padding:4px 12px;border-radius:20px;font-size:0.8rem;margin-left:10px}
+.estado-nuevo{background:#fbbf24;color:#0f172a}
+.total{font-size:1.2rem;font-weight:bold;color:#fbbf24;margin-top:10px}
+.btn{background:#0891b2;color:white;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;margin-top:10px;margin-right:10px}
+.flex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<h1>📋 Dashboard - El Reducto</h1>
+<div class="flex"><button class="btn" onclick="cargarPedidos()">🔄 Actualizar</button>
+<select id="filtro" onchange="cargarPedidos()" style="background:#1e293b;color:white;padding:8px;border-radius:8px">
+<option value="">Todos</option><option value="nuevo">🆕 Nuevos</option>
+<option value="confirmado">✅ Confirmados</option><option value="listo">🍽️ Listos</option>
+<option value="entregado">📦 Entregados</option>
+</select></div>
+<div id="pedidos-container">Cargando...</div>
+<script>
+async function cargarPedidos(){
+    const filtro=document.getElementById('filtro').value;
+    let url='/api/pedidos';
+    if(filtro) url+=`?estado=${filtro}`;
+    try{
+        const res=await fetch(url);
+        const data=await res.json();
+        const cont=document.getElementById('pedidos-container');
+        if(!data.pedidos||data.pedidos.length===0){
+            cont.innerHTML='<div class="pedido">📭 No hay pedidos hoy.</div>';
+            return;
+        }
+        cont.innerHTML=data.pedidos.map(p=>{
+            let items=p.items_json||[];
+            return `<div class="pedido ${p.estado}">
+                <div><span class="numero">#${p.numero}</span>
+                <span class="estado estado-${p.estado}">${p.estado.toUpperCase()}</span></div>
+                <div>${items.map(i=>`🍽️ ${i.cantidad||1}x ${i.name} — ${(i.price||0)*(i.cantidad||1)} MAD`).join('<br>')}</div>
+                <div class="total">💰 Total: ${p.total_mad} MAD</div>
+                <div>📞 ${p.cliente_telefono||p.id_cliente} | 🚚 ${p.tipo_entrega||'Recoge'} | 💳 ${p.metodo_pago||'Efectivo'}</div>
+            </div>`;
+        }).join('');
+    }catch(e){document.getElementById('pedidos-container').innerHTML='<div class="pedido">❌ Error</div>';}
+}
+cargarPedidos();
+setInterval(cargarPedidos,30000);
+</script>
+</body>
+</html>''')
     logger.info(f"✅ Listo. {len(phone_to_restaurant)} restaurantes mapeados")
 
 if __name__ == "__main__":
