@@ -294,12 +294,30 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
         return {"error": str(e)}
 
 # ========== ENVIAR MENÚ EN PDF ==========
-async def enviar_menu_pdf(to: str):
+
+   async def enviar_menu_pdf(to: str, lang: str):
+    """Envía el menú en PDF según el idioma del usuario"""
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WhatsApp not configured for PDF")
         return False
     
-    pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
+    # Mapeo de idioma a archivo PDF
+    pdf_files = {
+        'english': 'menu_en.pdf',
+        'spanish': 'menu_sp.pdf',        # ← CORREGIDO
+        'darija_latin': 'menu_dar.pdf',
+        'darija_arabic': 'menu_ar.pdf',
+        'french': 'menu_fr.pdf',
+        'turkish': 'menu_tr.pdf',
+        'german': 'menu_de.pdf'
+    }
+    
+    # Obtener el archivo según el idioma (fallback a español si no existe)
+    pdf_file = pdf_files.get(lang, 'menu_sp.pdf')
+    pdf_url = f"https://isa-bot-prod.onrender.com/static/{pdf_file}"
+    
+    # Nombre amigable para el cliente
+    filename = f"Menu_El_Reducto_{lang.upper()}.pdf"
     
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -312,18 +330,20 @@ async def enviar_menu_pdf(to: str):
         "type": "document",
         "document": {
             "link": pdf_url,
-            "filename": "Menu_El_Reducto.pdf"
+            "filename": filename
         }
     }
     
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=data)
         if response.status_code == 200:
-            logger.info(f"✅ PDF menu sent to {to}")
+            logger.info(f"✅ PDF menu ({pdf_file}) sent to {to}")
             return True
         else:
             logger.error(f"❌ Error sending PDF: {response.text}")
             return False
+
+
 
 # ========== PROCESAR ELIMINAR ==========
 async def process_remove_command(user_id: str, text: str, lang: str) -> str:
@@ -653,6 +673,45 @@ async def stats_diario():
     except Exception as e:
         logger.error(f"Error stats: {e}")
         return {"error": str(e)}
+@app.on_event("startup")
+async def startup():
+    logger.info(f"🚀 Bot {VERSION} starting...")
+    
+    # Debug: Verificar conexión a Supabase
+    if supabase:
+        try:
+            test = supabase.table("restaurantes").select("*").execute()
+            logger.info(f"📊 Tabla restaurantes tiene {len(test.data)} registros")
+            for r in test.data:
+                logger.info(f"  - {r.get('telefono')} → {r.get('nombre')}")
+        except Exception as e:
+            logger.error(f"❌ Error leyendo restaurantes: {e}")
+    
+    await load_phone_mapping()
+    logger.info(f"📞 Mapeo final: {phone_to_restaurant}")
+async def load_phone_mapping():
+    global phone_to_restaurant
+    try:
+        if not supabase:
+            return
+        
+        # Primero intentar cargar desde BD
+        result = supabase.table("restaurantes").select("id_restaurante, telefono").eq("is_active", True).execute()
+        phone_to_restaurant = {}
+        for r in result.data:
+            telefono = r.get("telefono", "")
+            if telefono:
+                phone_to_restaurant[telefono.replace("+", "")] = r["id_restaurante"]
+                phone_to_restaurant[telefono] = r["id_restaurante"]
+        
+        # 🔥 HARDCORE PARA LA DEMO - Forzar Restinga
+        phone_to_restaurant['527225529803'] = '44444444-4444-4444-4444-444444444444'
+        phone_to_restaurant['527225529803'] = '44444444-4444-4444-4444-444444444444'
+        
+        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
+        logger.info(f"🔍 Mapeo especial: 527225529803 → Restinga")
+    except Exception as e:
+        logger.error(f"Error mapeo: {e}")
 
 @app.on_event("startup")
 async def startup():
