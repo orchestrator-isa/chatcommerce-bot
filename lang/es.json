@@ -1,0 +1,11 @@
+{
+  "welcome": "👋 ¡Hola! Bienvenido a Restinga Restaurant. Escribe *MENU* para ver nuestros platos.",
+  "help": "📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: '3 coca'\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *CONFIRMAR* - Finalizar",
+  "cart_empty": "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver nuestros platos.",
+  "added_to_cart": "✅ *{cantidad} x {nombre}* añadido.\n💰 Subtotal: {total} MAD",
+  "removed_item": "✅ *{cantidad} x {nombre}* eliminado.\n💰 Nuevo total: {total} MAD",
+  "delivery_type": "🚚 *Tipo de entrega*\n\n• *1* - Recoger en local\n• *2* - Envío a domicilio\n\nElige una opción:",
+  "payment_method": "💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia bancaria\n\nElige una opción:",
+  "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n\n📋 *Número de pedido: {numero}*\n💰 Total: {total} MAD\n💳 Método: {metodo}\n⏱️ Tiempo: {tiempo}\n\n🙏 ¡Gracias por tu compra!\n\nEscribe *HOLA* para un nuevo pedido.",
+  "address_request": "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:"
+}
