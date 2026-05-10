@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "6.3-MULTI-IDIOMA-FIXED"
+VERSION = "6.4-DEMO-RESTINGA"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -82,6 +82,7 @@ async def load_phone_mapping():
     try:
         if not supabase:
             return
+        
         result = supabase.table("restaurantes").select("id_restaurante, telefono").eq("is_active", True).execute()
         phone_to_restaurant = {}
         for r in result.data:
@@ -89,7 +90,12 @@ async def load_phone_mapping():
             if telefono:
                 phone_to_restaurant[telefono.replace("+", "")] = r["id_restaurante"]
                 phone_to_restaurant[telefono] = r["id_restaurante"]
+        
+        # 🔥 HARDCORE PARA LA DEMO - Forzar Restinga
+        phone_to_restaurant['527225529803'] = '44444444-4444-4444-4444-444444444444'
+        
         logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
+        logger.info(f"🔍 Mapeo especial: 527225529803 → Restinga")
     except Exception as e:
         logger.error(f"Error mapeo: {e}")
 
@@ -294,17 +300,15 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
         return {"error": str(e)}
 
 # ========== ENVIAR MENÚ EN PDF ==========
-
-   async def enviar_menu_pdf(to: str, lang: str):
+async def enviar_menu_pdf(to: str, lang: str):
     """Envía el menú en PDF según el idioma del usuario"""
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WhatsApp not configured for PDF")
         return False
     
-    # Mapeo de idioma a archivo PDF
     pdf_files = {
         'english': 'menu_en.pdf',
-        'spanish': 'menu_sp.pdf',        # ← CORREGIDO
+        'spanish': 'menu_sp.pdf',
         'darija_latin': 'menu_dar.pdf',
         'darija_arabic': 'menu_ar.pdf',
         'french': 'menu_fr.pdf',
@@ -312,12 +316,9 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
         'german': 'menu_de.pdf'
     }
     
-    # Obtener el archivo según el idioma (fallback a español si no existe)
     pdf_file = pdf_files.get(lang, 'menu_sp.pdf')
     pdf_url = f"https://isa-bot-prod.onrender.com/static/{pdf_file}"
-    
-    # Nombre amigable para el cliente
-    filename = f"Menu_El_Reducto_{lang.upper()}.pdf"
+    filename = f"Menu_El_Reducto_{lang}.pdf"
     
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -342,8 +343,6 @@ async def guardar_pedido(user_id: str, cliente_nombre: str, items: list, total: 
         else:
             logger.error(f"❌ Error sending PDF: {response.text}")
             return False
-
-
 
 # ========== PROCESAR ELIMINAR ==========
 async def process_remove_command(user_id: str, text: str, lang: str) -> str:
@@ -531,7 +530,7 @@ async def process_message(body: dict):
                         elif text_lower in ['menu', 'menú']:
                             menu_text, _ = await get_restaurant_menu(client_id, lang)
                             await send_message(user_id, menu_text)
-                            await enviar_menu_pdf(user_id)
+                            await enviar_menu_pdf(user_id, lang)  # ← CORREGIDO: lang agregado
                             help_text = LanguageDetector.get_help(lang)
                             await send_message(user_id, help_text)
                             response = None
@@ -673,6 +672,8 @@ async def stats_diario():
     except Exception as e:
         logger.error(f"Error stats: {e}")
         return {"error": str(e)}
+
+# ========== STARTUP ==========
 @app.on_event("startup")
 async def startup():
     logger.info(f"🚀 Bot {VERSION} starting...")
@@ -689,34 +690,6 @@ async def startup():
     
     await load_phone_mapping()
     logger.info(f"📞 Mapeo final: {phone_to_restaurant}")
-async def load_phone_mapping():
-    global phone_to_restaurant
-    try:
-        if not supabase:
-            return
-        
-        # Primero intentar cargar desde BD
-        result = supabase.table("restaurantes").select("id_restaurante, telefono").eq("is_active", True).execute()
-        phone_to_restaurant = {}
-        for r in result.data:
-            telefono = r.get("telefono", "")
-            if telefono:
-                phone_to_restaurant[telefono.replace("+", "")] = r["id_restaurante"]
-                phone_to_restaurant[telefono] = r["id_restaurante"]
-        
-        # 🔥 HARDCORE PARA LA DEMO - Forzar Restinga
-        phone_to_restaurant['527225529803'] = '44444444-4444-4444-4444-444444444444'
-        phone_to_restaurant['527225529803'] = '44444444-4444-4444-4444-444444444444'
-        
-        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
-        logger.info(f"🔍 Mapeo especial: 527225529803 → Restinga")
-    except Exception as e:
-        logger.error(f"Error mapeo: {e}")
-
-@app.on_event("startup")
-async def startup():
-    logger.info(f"🚀 Bot {VERSION} starting...")
-    await load_phone_mapping()
     logger.info(f"✅ {len(LANGUAGES)} languages loaded: {list(LANGUAGES.keys())}")
     
     dashboard_path = "static/dashboard.html"
