@@ -4,7 +4,7 @@ import logging
 import re
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +13,7 @@ from supabase import create_client
 from typing import Dict, List, Optional
 import httpx
 
-VERSION = "7.0-RESTINGA-COMPLETA"
+VERSION = "7.2-RESTINGA-COMPLETA"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("isa-bot")
@@ -74,6 +74,7 @@ user_idioma_manual: Dict[str, bool] = {}
 pedido_estado: Dict[str, dict] = {}
 restaurant_status = "normal"  # normal, moderado, lleno
 clientes_validados: set = set()  # Teléfonos que pueden pagar por transferencia
+session_activa: Dict[str, str] = {}  # user_id -> session_id
 
 # Tiempos estimados según estado y tipo
 TIEMPOS = {
@@ -86,7 +87,7 @@ TIEMPOS = {
 phone_to_restaurant: Dict[str, str] = {}
 
 async def load_phone_mapping():
-    global phone_to_restaurant
+    global phone_to_restaurant, clientes_validados
     try:
         if not supabase:
             return
@@ -102,9 +103,9 @@ async def load_phone_mapping():
         phone_to_restaurant['212626282904'] = '44444444-4444-4444-4444-444444444444'
         phone_to_restaurant['212668087490'] = '44444444-4444-4444-4444-444444444444'
         
-        # Cargar clientes validados (para transferencia)
+        # Cargar clientes validados
         try:
-            result = supabase.table("clientes_validados").select("telefono").execute()
+            result = supabase.table("valid_clients").select("telefono").execute()
             for r in result.data:
                 clientes_validados.add(r.get("telefono", ""))
         except:
@@ -113,6 +114,33 @@ async def load_phone_mapping():
         logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e:
         logger.error(f"Error mapeo: {e}")
+
+async def registrar_mensaje(user_id: str, direccion: str, mensaje: str, intent: str = None):
+    """Registra mensaje en la tabla messages"""
+    try:
+        if not supabase:
+            return
+        # Buscar sesión activa o crear una
+        session_id = session_activa.get(user_id)
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            session_activa[user_id] = session_id
+            supabase.table("sessions").insert({
+                "id": session_id,
+                "user_id": user_id,
+                "inicio": datetime.now().isoformat(),
+                "estado": "activa"
+            }).execute()
+        
+        supabase.table("messages").insert({
+            "session_id": session_id,
+            "direccion": direccion,
+            "message": mensaje[:500],
+            "intent": intent,
+            "created_at": datetime.now().isoformat()
+        }).execute()
+    except Exception as e:
+        logger.error(f"Error registrando mensaje: {e}")
 
 # ========== DETECTOR DE IDIOMA ==========
 class LanguageDetector:
@@ -145,17 +173,28 @@ class LanguageDetector:
         return get_text(lang, 'help')
 
 # ========== MENÚ ==========
-async def get_restaurant_menu(client_id: str, user_lang_code: str = 'spanish') -> tuple:
+async def get_restaurant_menu(client_id: str, user_lang_code: str = 'spanish', waba: bool = True) -> tuple:
     try:
         if not supabase:
             return "❌ Error de conexión", []
-        result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
+        
+        query = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True)
+        
+        # Para WABA, ocultar productos que no deben mostrarse (como los "secreto" gratis)
+        if waba:
+            query = query.eq("show_on_waba", True)
+        
+        result = query.execute()
+        
         if not result.data:
             return "📋 *MENÚ*\nNo hay platos disponibles.", []
         
         menu_lines = ["📋 *MENÚ RESTINGA*", ""]
         for i, item in enumerate(result.data, 1):
-            menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {item['price']} MAD")
+            if item['price'] == 0:
+                menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — 🆓 GRATIS con bebida")
+            else:
+                menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {item['price']} MAD")
             if item.get('description'):
                 menu_lines.append(f"   📝 {item['description']}")
             menu_lines.append("")
@@ -167,13 +206,20 @@ async def get_restaurant_menu(client_id: str, user_lang_code: str = 'spanish') -
 # ========== CARRITO ==========
 async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: str, lang: str) -> str:
     try:
-        _, platos = await get_restaurant_menu(client_id, lang)
+        _, platos = await get_restaurant_menu(client_id, lang, waba=True)
         if not platos or item_index > len(platos):
             return get_text(lang, 'help')
         selected = platos[item_index - 1]
         
         if user_id not in carts:
             carts[user_id] = []
+        
+        # Verificar si es producto gratis (precio 0)
+        if selected["price"] == 0:
+            # Verificar si ya hay una bebida en el carrito (precio > 0)
+            tiene_bebida = any(item["price"] > 0 for item in carts[user_id])
+            if not tiene_bebida:
+                return f"📌 *{selected['dish_name']}* es GRATIS con la compra de una bebida u otro producto.\n\nPor favor, añade una bebida al carrito primero (ej: escribe '18' para Té a la menta - 10 MAD)"
         
         for _ in range(cantidad):
             carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
@@ -248,7 +294,9 @@ async def get_cart(user_id: str, lang: str) -> str:
     
     item_lines = []
     for name, data in items_dict.items():
-        if data["cantidad"] > 1:
+        if data["price"] == 0:
+            item_lines.append(f"• {name} — 🆓 GRATIS (con bebida)")
+        elif data["cantidad"] > 1:
             item_lines.append(f"• {name} x{data['cantidad']} — {data['cantidad'] * data['price']} MAD")
         else:
             item_lines.append(f"• {name} — {data['price']} MAD")
@@ -262,6 +310,9 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo_entrega: st
         if not supabase:
             return {"error": "Database not connected"}
         
+        # Obtener client_id del usuario
+        client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
+        
         items_json = []
         for item in items:
             items_json.append({
@@ -271,7 +322,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo_entrega: st
             })
         
         data = {
-            "id_cliente": str(uuid.uuid4()),
+            "client_id": client_id,
             "cliente_telefono": user_id,
             "items_json": items_json,
             "total_mad": total,
@@ -284,11 +335,11 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo_entrega: st
             "created_at": datetime.now().isoformat()
         }
         
-        result = supabase.table("pedidos").insert(data).execute()
+        result = supabase.table("orders").insert(data).execute()
         
         if result.data:
             pedido = result.data[0]
-            return {"numero": pedido.get("numero"), "id": pedido.get("id_pedido")}
+            return {"numero": pedido.get("numero"), "id": pedido.get("id")}
         return {"error": "Failed to create order"}
     except Exception as e:
         logger.error(f"Error guardando pedido: {e}")
@@ -300,8 +351,18 @@ async def enviar_menu_pdf(to: str, lang: str):
         logger.error("WhatsApp not configured for PDF")
         return False
     
-    pdf_url = "https://isa-bot-prod.onrender.com/static/El_Reducto_Experience.pdf"
-    filename = "Menu_Restinga.pdf"
+    # Mapeo de idioma a PDF (futuro)
+    pdf_files = {
+        'spanish': 'menu_es.pdf',
+        'english': 'menu_en.pdf',
+        'french': 'menu_fr.pdf',
+        'darija_latin': 'menu_dar.pdf',
+        'darija_arabic': 'menu_ar.pdf'
+    }
+    
+    pdf_file = pdf_files.get(lang, 'menu_es.pdf')
+    pdf_url = f"https://isa-bot-prod.onrender.com/static/{pdf_file}"
+    filename = f"Menu_Restinga_{lang}.pdf"
     
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -366,8 +427,6 @@ async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
     return f"📍 Dirección guardada.\n\n💰 Total: {total} MAD\n\n{get_text(lang, 'payment_method')}"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
-    global restaurant_status
-    
     if text == '1':  # Efectivo
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
         pedido_estado[user_id]["fase"] = "cash_bill"
@@ -388,14 +447,21 @@ async def procesar_billete(user_id: str, text: str, lang: str) -> str:
     
     try:
         billete = int(text)
-        # Verificar si hay cambio (simulación - recepción puede override)
+        # Verificar si hay cambio
         if billete in [100, 200] and restaurant_status == "lleno":
             return get_text(lang, 'cash_no_change', bill=billete)
         
         pedido_estado[user_id]["billete"] = str(billete)
         
         total = sum(item["price"] for item in carts.get(user_id, []))
+        
+        # Validar que total > 0
+        if total <= 0:
+            return "⚠️ *No se puede confirmar el pedido*\n\nEl total es 0 MAD. Por favor, añade productos con precio antes de confirmar."
+        
         cambio = billete - total
+        if cambio < 0:
+            return f"⚠️ *El billete de {billete} MAD no es suficiente.*\nEl total es {total} MAD. Por favor, usa un billete más grande."
         
         tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
         tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
@@ -430,6 +496,16 @@ async def procesar_billete(user_id: str, text: str, lang: str) -> str:
         
         metodo_texto = f"Efectivo con {billete} MAD" + (f" (cambio: {cambio} MAD)" if cambio > 0 else "")
         
+        # Registrar pago
+        if supabase and resultado.get("id"):
+            supabase.table("payments").insert({
+                "order_id": resultado.get("id"),
+                "amount": total,
+                "method": "efectivo",
+                "status": "completado",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
         return get_text(lang, 'order_confirmed', 
                        numero=numero, total=total, metodo=metodo_texto, tiempo=tiempo)
         
@@ -440,6 +516,11 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     global restaurant_status
     
     total = sum(item["price"] for item in carts.get(user_id, []))
+    
+    # Validar que total > 0
+    if total <= 0:
+        return "⚠️ *No se puede confirmar el pedido*\n\nEl total es 0 MAD. Por favor, añade productos con precio antes de confirmar."
+    
     tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
     tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
     
@@ -466,6 +547,16 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
         return f"❌ Error al guardar: {resultado['error']}"
     
     numero = resultado.get("numero", "???")
+    
+    # Registrar pago pendiente
+    if supabase and resultado.get("id"):
+        supabase.table("payments").insert({
+            "order_id": resultado.get("id"),
+            "amount": total,
+            "method": "transferencia",
+            "status": "pendiente",
+            "created_at": datetime.now().isoformat()
+        }).execute()
     
     # Notificar a recepción
     await send_message('212668087490', 
@@ -519,6 +610,9 @@ async def process_message(body: dict):
                         
                         lang = LanguageDetector.detect(text)
                         
+                        # Registrar mensaje entrante
+                        await registrar_mensaje(user_id, "incoming", text)
+                        
                         estado = pedido_estado.get(user_id, {})
                         fase = estado.get("fase", "inicio")
                         
@@ -526,26 +620,32 @@ async def process_message(body: dict):
                         if fase == "entrega":
                             response = await procesar_entrega(user_id, text_lower, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "check_zona":
                             response = await procesar_zona(user_id, text, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "direccion":
                             response = await procesar_direccion(user_id, text, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "pago":
                             response = await procesar_pago(user_id, text_lower, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "cash_bill":
                             response = await procesar_billete(user_id, text, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "transfer_pending":
                             response = await procesar_transferencia(user_id, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         elif fase == "pago_recoger_forzado":
                             if text_lower in ['confirmar', 'confirm']:
@@ -554,6 +654,7 @@ async def process_message(body: dict):
                             else:
                                 response = "Escribe *CONFIRMAR* para continuar con recogida."
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         
                         # Comandos principales
@@ -572,74 +673,89 @@ async def process_message(body: dict):
 1. 🇪🇸 Español
 2. 🇬🇧 English  
 3. 🇫🇷 Français
-4. 🇩🇪 Deutsch (próximamente)
-5. 🇹🇷 Türkçe (próximamente)
-6. 🇲🇦 Darija
-7. 🇲🇦 العربية
+4. 🇲🇦 Darija
+5. 🇲🇦 العربية
 
 Responde con el número de tu idioma:
 """
                                 await send_message(user_id, lang_options)
+                                await registrar_mensaje(user_id, "outgoing", lang_options)
                                 pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                                 continue
                             else:
-                                response = LanguageDetector.get_welcome(user_lang[user_id])
-                                await send_message(user_id, response)
-                                help_text = LanguageDetector.get_help(user_lang[user_id])
-                                await send_message(user_id, help_text)
+                                user_lang_code = user_lang[user_id]
+                                welcome_text = LanguageDetector.get_welcome(user_lang_code)
+                                help_text = LanguageDetector.get_help(user_lang_code)
+                                combined = f"{welcome_text}\n\n{help_text}"
+                                await send_message(user_id, combined)
+                                await registrar_mensaje(user_id, "outgoing", combined)
                                 continue
                         
                         elif fase == "seleccion_idioma":
                             idiomas = {
                                 '1': 'spanish', '2': 'english', '3': 'french',
-                                '4': 'german', '5': 'turkish', '6': 'darija_latin', '7': 'darija_arabic'
+                                '4': 'darija_latin', '5': 'darija_arabic'
                             }
                             if text in idiomas:
                                 user_lang[user_id] = idiomas[text]
                                 user_idioma_manual[user_id] = True
-                                response = LanguageDetector.get_welcome(user_lang[user_id])
-                                await send_message(user_id, response)
+                                welcome_text = LanguageDetector.get_welcome(user_lang[user_id])
                                 help_text = LanguageDetector.get_help(user_lang[user_id])
-                                await send_message(user_id, help_text)
-                                del pedido_estado[user_id]
-                                continue
+                                combined = f"{welcome_text}\n\n{help_text}"
+                                await send_message(user_id, combined)
+                                await registrar_mensaje(user_id, "outgoing", combined)
+                                if user_id in pedido_estado:
+                                    del pedido_estado[user_id]
                             else:
-                                await send_message(user_id, "❌ Opción no válida. Elige un número del 1 al 7.")
-                                continue
+                                await send_message(user_id, "❌ Opción no válida. Elige un número del 1 al 5.")
+                            continue
                         
                         elif text_lower in ['menu', 'menú']:
-                            menu_text, _ = await get_restaurant_menu(client_id, lang)
+                            user_lang_code = user_lang.get(user_id, 'spanish')
+                            menu_text, _ = await get_restaurant_menu(client_id, user_lang_code, waba=True)
                             await send_message(user_id, menu_text)
-                            await enviar_menu_pdf(user_id, lang)
-                            help_text = LanguageDetector.get_help(lang)
+                            await registrar_mensaje(user_id, "outgoing", menu_text)
+                            await enviar_menu_pdf(user_id, user_lang_code)
+                            help_text = LanguageDetector.get_help(user_lang_code)
                             await send_message(user_id, help_text)
+                            await registrar_mensaje(user_id, "outgoing", help_text)
                             continue
                         
                         elif text_lower in ['pedido', 'order', 'talab', 'طلب', 'cart']:
                             response = await get_cart(user_id, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         
                         elif text_lower in ['confirmar', 'confirm', 't2kid', 'تأكيد', 'checkout']:
+                            total = sum(item["price"] for item in carts.get(user_id, []))
+                            if total <= 0:
+                                response = "⚠️ *No se puede confirmar el pedido*\n\nTu carrito está vacío o el total es 0 MAD. Por favor, añade productos con precio antes de confirmar."
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                                continue
                             if user_id in carts and carts[user_id]:
                                 response = await iniciar_entrega(user_id, lang)
                             else:
                                 response = get_text(lang, 'cart_empty')
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         
                         elif text_lower in ['help', 'ayuda', 'aide', 'hilfe', 'yardim', 'مساعدة', 'commands']:
                             response = LanguageDetector.get_help(lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         
                         elif text_lower.isdigit():
                             response = await add_to_cart(user_id, int(text_lower), 1, client_id, lang)
                             await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
                             continue
                         
                         else:
-                            _, platos = await get_restaurant_menu(client_id, lang)
+                            _, platos = await get_restaurant_menu(client_id, lang, waba=True)
                             quantity_match = re.match(r'(\d+)\s+(.+)', text_lower)
                             if quantity_match:
                                 cantidad = int(quantity_match.group(1))
@@ -648,10 +764,12 @@ Responde con el número de tu idioma:
                                     if nombre in plato['dish_name'].lower():
                                         response = await add_to_cart(user_id, i, cantidad, client_id, lang)
                                         await send_message(user_id, response)
+                                        await registrar_mensaje(user_id, "outgoing", response)
                                         break
                                 else:
                                     response = LanguageDetector.get_help(lang)
                                     await send_message(user_id, response)
+                                    await registrar_mensaje(user_id, "outgoing", response)
                             else:
                                 # Verificar si es comando de eliminar
                                 remove_match = re.match(r'(eliminar|quitar|borrar|remove|delete)\s+(.+)', text_lower)
@@ -664,12 +782,22 @@ Responde con el número de tu idioma:
                                     else:
                                         response = await remove_from_cart_by_name(user_id, resto, lang)
                                     await send_message(user_id, response)
+                                    await registrar_mensaje(user_id, "outgoing", response)
                                 else:
                                     response = LanguageDetector.get_help(lang)
                                     await send_message(user_id, response)
+                                    await registrar_mensaje(user_id, "outgoing", response)
                         
     except Exception as e:
         logger.error(f"Error procesando: {e}")
+        # Registrar error
+        if supabase:
+            supabase.table("logs_registro").insert({
+                "level": "ERROR",
+                "message": str(e),
+                "source": "process_message",
+                "created_at": datetime.now().isoformat()
+            }).execute()
 
 async def send_message(to: str, message: str):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
@@ -708,11 +836,14 @@ async def get_restaurant_status():
 @app.post("/api/pedido/autorizar")
 async def autorizar_pedido(request: Request):
     data = await request.json()
-    pedido_id = data.get("pedido_id")
+    order_id = data.get("order_id")
     user_id = data.get("user_id")
     
-    # Actualizar estado del pedido
-    supabase.table("pedidos").update({"estado": "confirmado", "pagado": True}).eq("id_pedido", pedido_id).execute()
+    # Actualizar estado del pedido en orders
+    supabase.table("orders").update({"estado": "confirmado", "pagado": True}).eq("id", order_id).execute()
+    
+    # Actualizar pago
+    supabase.table("payments").update({"status": "completado", "verified_by": "dashboard"}).eq("order_id", order_id).execute()
     
     # Notificar al cliente
     await send_message(user_id, "✅ *Pago verificado!* Tu pedido ha sido confirmado y enviado a cocina.")
@@ -722,10 +853,14 @@ async def autorizar_pedido(request: Request):
 @app.post("/api/pedido/estado")
 async def cambiar_estado_pedido(request: Request):
     data = await request.json()
-    pedido_id = data.get("pedido_id")
+    order_id = data.get("order_id")
     nuevo_estado = data.get("estado")
     
-    supabase.table("pedidos").update({"estado": nuevo_estado}).eq("id_pedido", pedido_id).execute()
+    update_data = {"estado": nuevo_estado}
+    if nuevo_estado == "entregado":
+        update_data["delivered_at"] = datetime.now().isoformat()
+    
+    supabase.table("orders").update(update_data).eq("id", order_id).execute()
     
     return {"status": "ok"}
 
@@ -733,34 +868,74 @@ async def cambiar_estado_pedido(request: Request):
 async def validar_cliente(request: Request):
     data = await request.json()
     telefono = data.get("telefono")
+    nombre = data.get("nombre", "")
+    email = data.get("email", "")
+    
     clientes_validados.add(telefono)
     
-    # Guardar en BD
-    supabase.table("clientes_validados").insert({"telefono": telefono}).execute()
+    supabase.table("valid_clients").insert({
+        "telefono": telefono,
+        "nombre": nombre,
+        "email": email,
+        "verified_at": datetime.now().isoformat()
+    }).execute()
     
     return {"status": "ok"}
 
-@app.get("/api/pedidos")
-async def get_pedidos(estado: str = None):
+@app.get("/api/orders")
+async def get_orders(estado: str = None, fecha: str = None):
+    if not supabase:
+        raise HTTPException(500, "Supabase not configured")
+    try:
+        query = supabase.table("orders").select("*")
+        if estado:
+            query = query.eq("estado", estado)
+        if fecha:
+            query = query.gte("created_at", f"{fecha}T00:00:00").lt("created_at", f"{fecha}T23:59:59")
+        else:
+            hoy = datetime.now().date().isoformat()
+            query = query.gte("created_at", f"{hoy}T00:00:00")
+        
+        result = query.order("numero", desc=False).execute()
+        return {"orders": result.data, "count": len(result.data)}
+    except Exception as e:
+        logger.error(f"Error listing orders: {e}")
+        return {"orders": [], "count": 0}
+
+@app.get("/api/menu/{client_id}")
+async def get_menu(client_id: str, waba: bool = True):
+    if not supabase:
+        raise HTTPException(500, "Supabase not configured")
+    
+    query = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True)
+    if waba:
+        query = query.eq("show_on_waba", True)
+    
+    result = query.execute()
+    return {"items": result.data, "count": len(result.data)}
+
+@app.get("/api/stats/diario")
+async def stats_diario():
     if not supabase:
         raise HTTPException(500, "Supabase not configured")
     try:
         hoy = datetime.now().date().isoformat()
-        query = supabase.table("pedidos").select("*").gte("created_at", hoy)
-        if estado:
-            query = query.eq("estado", estado)
-        result = query.order("numero", desc=False).execute()
-        return {"pedidos": result.data, "count": len(result.data)}
+        result = supabase.table("orders").select("*").gte("created_at", hoy).execute()
+        orders = result.data
+        
+        total_ventas = sum(o.get("total_mad", 0) for o in orders)
+        pedidos_por_estado = {estado: len([o for o in orders if o.get("estado") == estado]) 
+                              for estado in ["nuevo", "confirmado", "cocina", "listo", "entregado", "cancelado"]}
+        
+        return {
+            "total_orders": len(orders),
+            "total_sales": total_ventas,
+            "orders_by_status": pedidos_por_estado,
+            "recent_orders": orders[-10:]
+        }
     except Exception as e:
-        logger.error(f"Error listing orders: {e}")
-        return {"pedidos": [], "count": 0}
-
-@app.get("/api/platos/{client_id}")
-async def get_platos(client_id: str):
-    if not supabase:
-        raise HTTPException(500, "Supabase not configured")
-    result = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
-    return {"platos": result.data, "count": len(result.data)}
+        logger.error(f"Error stats: {e}")
+        return {"error": str(e)}
 
 # ========== STARTUP ==========
 @app.on_event("startup")
@@ -769,16 +944,17 @@ async def startup():
     await load_phone_mapping()
     logger.info(f"✅ {len(LANGUAGES)} languages loaded: {list(LANGUAGES.keys())}")
     
+    # Crear dashboard completo
     dashboard_path = "static/dashboard.html"
     if not os.path.exists(dashboard_path):
         os.makedirs("static", exist_ok=True)
         html_content = '''<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>Dashboard Restinga</title>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Restinga Restaurant</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:20px}
-h1{color:#22d3ee;margin-bottom:20px}
 .login{max-width:400px;margin:100px auto;background:#1e293b;padding:30px;border-radius:16px}
 input{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:none}
 button{background:#0891b2;color:white;padding:12px;border:none;border-radius:8px;cursor:pointer}
@@ -800,6 +976,8 @@ button{background:#0891b2;color:white;padding:12px;border:none;border-radius:8px
 .status-normal{background:#22c55e;color:white}
 .status-moderado{background:#f97316;color:white}
 .status-lleno{background:#ef4444;color:white}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px;text-align:left;border-bottom:1px solid #334155}
 </style>
 </head>
 <body>
@@ -807,6 +985,7 @@ button{background:#0891b2;color:white;padding:12px;border:none;border-radius:8px
     <h2>🔐 Dashboard Restinga</h2>
     <input type="password" id="password" placeholder="Contraseña">
     <button onclick="verificar()">Acceder</button>
+    <p style="color:#94a3b8; margin-top:10px">Contacta con el administrador para la contraseña</p>
 </div>
 <div id="dashboard" style="display:none">
     <h1>📋 Dashboard - Restinga Restaurant</h1>
@@ -828,7 +1007,11 @@ button{background:#0891b2;color:white;padding:12px;border:none;border-radius:8px
             <option value="entregado">📦 Entregados</option>
         </select>
     </div>
+    
     <div id="pedidos-container">Cargando...</div>
+    
+    <h2 style="margin-top:30px">📊 Estadísticas del día</h2>
+    <div id="stats-container">Cargando...</div>
 </div>
 <script>
 const PASS = "restinga2026";
@@ -838,12 +1021,14 @@ function verificar() {
         document.getElementById('login').style.display = 'none';
         document.getElementById('dashboard').style.display = 'block';
         cargarPedidos();
+        cargarStats();
     } else { alert('❌ Contraseña incorrecta'); }
 }
 if(localStorage.getItem('auth') === 'true') {
     document.getElementById('login').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
     cargarPedidos();
+    cargarStats();
 }
 async function cambiarStatus(status) {
     await fetch('/api/restaurant/status', {
@@ -855,17 +1040,17 @@ async function cambiarStatus(status) {
 }
 async function cargarPedidos() {
     const filtro = document.getElementById('filtro').value;
-    let url = '/api/pedidos';
+    let url = '/api/orders';
     if(filtro) url += `?estado=${filtro}`;
     try {
         const res = await fetch(url);
         const data = await res.json();
         const cont = document.getElementById('pedidos-container');
-        if(!data.pedidos || data.pedidos.length === 0) {
+        if(!data.orders || data.orders.length === 0) {
             cont.innerHTML = '<div class="pedido">📭 No hay pedidos hoy.</div>';
             return;
         }
-        cont.innerHTML = data.pedidos.map(p => {
+        cont.innerHTML = data.orders.map(p => {
             let items = p.items_json || [];
             let billeteInfo = p.billete ? ` | Billete: ${p.billete} MAD` : '';
             return `<div class="pedido ${p.estado}">
@@ -875,36 +1060,54 @@ async function cargarPedidos() {
                 <div class="total">💰 Total: ${p.total_mad} MAD${billeteInfo}</div>
                 <div>📞 ${p.cliente_telefono} | 🚚 ${p.tipo_entrega||'Recoge'} | 💳 ${p.metodo_pago||'Efectivo'}</div>
                 <div style="margin-top:10px">
-                    ${p.metodo_pago === 'transferencia' && p.estado === 'nuevo' ? 
-                        `<button class="btn" onclick="autorizarPago('${p.id_pedido}', '${p.cliente_telefono}')">✅ Autorizar pago</button>` : ''}
-                    ${p.estado !== 'cocina' && p.estado !== 'listo' && p.estado !== 'entregado' ?
-                        `<button class="btn" onclick="cambiarEstado('${p.id_pedido}', 'cocina')">👨‍🍳 Enviar a cocina</button>` : ''}
+                    ${p.metodo_pago === 'transferencia' && (p.estado === 'nuevo' || p.estado === 'confirmado') ? 
+                        `<button class="btn" onclick="autorizarPago('${p.id}', '${p.cliente_telefono}')">✅ Autorizar pago</button>` : ''}
+                    ${p.estado !== 'cocina' && p.estado !== 'listo' && p.estado !== 'entregado' && p.estado !== 'nuevo' ?
+                        `<button class="btn" onclick="cambiarEstado('${p.id}', 'cocina')">👨‍🍳 Enviar a cocina</button>` : ''}
                     ${p.estado === 'cocina' ?
-                        `<button class="btn" onclick="cambiarEstado('${p.id_pedido}', 'listo')">🍽️ Marcar listo</button>` : ''}
+                        `<button class="btn" onclick="cambiarEstado('${p.id}', 'listo')">🍽️ Marcar listo</button>` : ''}
                     ${p.estado === 'listo' ?
-                        `<button class="btn" onclick="cambiarEstado('${p.id_pedido}', 'entregado')">📦 Entregado</button>` : ''}
+                        `<button class="btn" onclick="cambiarEstado('${p.id}', 'entregado')">📦 Entregado</button>` : ''}
                 </div>
             </div>`;
         }).join('');
     } catch(e) { console.error(e); }
 }
-async function autorizarPago(pedido_id, user_id) {
+async function cargarStats() {
+    try {
+        const res = await fetch('/api/stats/diario');
+        const data = await res.json();
+        const cont = document.getElementById('stats-container');
+        cont.innerHTML = `
+            <table>
+                <tr><th>Métrica</th><th>Valor</th></tr>
+                <tr><td>📦 Total pedidos</td><td>${data.total_orders || 0}</td></tr>
+                <tr><td>💰 Total ventas</td><td>${data.total_sales || 0} MAD</td></tr>
+                <tr><td>🆕 Nuevos</td><td>${(data.orders_by_status || {}).nuevo || 0}</td></tr>
+                <tr><td>👨‍🍳 En cocina</td><td>${(data.orders_by_status || {}).cocina || 0}</td></tr>
+                <tr><td>🍽️ Listos</td><td>${(data.orders_by_status || {}).listo || 0}</td></tr>
+                <tr><td>📦 Entregados</td><td>${(data.orders_by_status || {}).entregado || 0}</td></tr>
+            </table>
+        `;
+    } catch(e) { console.error(e); }
+}
+async function autorizarPago(order_id, user_id) {
     await fetch('/api/pedido/autorizar', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({pedido_id: pedido_id, user_id: user_id})
+        body: JSON.stringify({order_id: order_id, user_id: user_id})
     });
     cargarPedidos();
 }
-async function cambiarEstado(pedido_id, estado) {
+async function cambiarEstado(order_id, estado) {
     await fetch('/api/pedido/estado', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({pedido_id: pedido_id, estado: estado})
+        body: JSON.stringify({order_id: order_id, estado: estado})
     });
     cargarPedidos();
 }
-setInterval(cargarPedidos, 30000);
+setInterval(() => { cargarPedidos(); cargarStats(); }, 30000);
 </script>
 </body>
 </html>'''

@@ -1,18 +1,18 @@
 {
   "welcome": "👋 ¡Hola! Bienvenido a Restinga Restaurant. Escribe *MENU* para ver nuestros platos.",
-  "help": "📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *CANTIDAD* - Ej: '3 coca'\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *CONFIRMAR* - Finalizar",
+  "help": "📋 *Comandos*\n• *MENU* - Ver carta\n• *NÚMERO* - Añadir plato\n• *PEDIDO* - Ver carrito\n• *ELIMINAR X* - Quitar plato\n• *CONFIRMAR* - Finalizar",
   "cart_empty": "🛒 *Carrito vacío*\n\nEscribe *MENU* para ver nuestros platos.",
   "added_to_cart": "✅ *{cantidad} x {nombre}* añadido.\n💰 Subtotal: {total} MAD",
   "removed_item": "✅ *{cantidad} x {nombre}* eliminado.\n💰 Nuevo total: {total} MAD",
   "delivery_type": "🚚 *Tipo de entrega*\n\n• *1* - Recoger en local\n• *2* - Envío a domicilio (radio 100m)\n\nElige una opción:",
-  "payment_method": "💳 *Método de pago*\n\n• *1* - Efectivo\n• *2* - Transferencia bancaria\n\nElige una opción:",
-  "cash_bill": "💰 *Pago en efectivo*\n\n¿Con qué billete pagarás? (Ej: 50, 100, 200 MAD)",
-  "cash_no_change": "⚠️ *Lo sentimos*\nNo tenemos cambio para {bill} MAD. ¿Puedes pagar con billete más pequeño o con tarjeta?",
+  "payment_method": "💳 *Método de pago*\n\n• *1* 💵 *Efectivo* (MAD/EUR)\n   - Aceptamos: MAD (Dirham marroquí) y EUR (Euro)\n   - ¿Con qué billete pagarás? (Ej: 50, 100, 200 MAD o 5, 10, 20 EUR)\n\n• *2* 💳 *Tarjeta* (Visa/Mastercard)\n   - Pago al momento de recoger/entregar\n   - Disponemos de datáfono POS\n   - *Nota:* En caso de fallo de internet, solo efectivo temporalmente\n\n• *3* 🏦 *Transferencia bancaria*\n   - Solo para clientes validados\n   - Envía comprobante a este chat\n   - Recepción verificará en ≤5 minutos\n\nElige una opción (1, 2 o 3):",
+  "cash_bill": "💰 *Pago en efectivo*\n\n¿Con qué billete pagarás?\n• MAD: 50, 100, 200\n• EUR: 5, 10, 20, 50\n\nResponde con el número (ej: 100 para 100 MAD, 10 para 10 EUR):",
+  "cash_no_change": "⚠️ *Lo sentimos*\nNo tenemos cambio para {bill} {currency}. ¿Puedes pagar con billete más pequeño o con tarjeta?",
+  "card_payment": "💳 *Pago con tarjeta*\n\n✅ Confirmado. Pagarás con tarjeta al momento de recoger/entregar.\n\n📌 *Nota:* En caso de fallo de internet, solo efectivo temporalmente.",
   "transfer_pending": "💳 *Transferencia bancaria*\n\nRealiza el pago y envía el comprobante a este chat. Recepción verificará el pago en menos de 5 minutos.\n\n*Número de cuenta:* [IBAN DEL RESTAURANTE]",
-  "transfer_unverified": "⚠️ *Cliente no validado*\nLos pagos por transferencia son solo para clientes registrados. Por favor, elige efectivo.",
-  "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n\n📋 *Número de pedido: {numero}*\n💰 Total: {total} MAD\n💳 Método: {metodo}\n⏱️ Tiempo: {tiempo}\n\n🙏 ¡Gracias por tu compra!\n\nEscribe *HOLA* para un nuevo pedido.",
+  "transfer_unverified": "⚠️ *Cliente no validado*\nLos pagos por transferencia son solo para clientes registrados. Por favor, elige efectivo o tarjeta.",
+  "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n\n📋 *Número de pedido: {numero}*\n💰 Total: {total} MAD\n💳 Método: {metodo}\n⏱️ Tiempo: {tiempo}\n\n📌 *Información adicional:*\n• Aceptamos: Efectivo (MAD/EUR), Tarjeta (Visa/Mastercard)*\n• *En caso de fallo de internet, solo efectivo temporalmente\n\n🙏 ¡Gracias por tu compra!\n\nEscribe *HOLA* para un nuevo pedido.",
   "address_request": "📍 *Dirección de envío*\n\nPor favor, escribe tu dirección completa:",
   "delivery_zone_check": "📍 *Verificación de zona*\n\n¿Estás dentro de un radio de 100m del restaurante (2-3 calles a la redonda)?\n\nResponde *SÍ* o *NO*:",
-  "delivery_out_of_zone": "📦 *Fuera de zona*\n\nLo sentimos, solo entregamos en un radio de 100m. Puedes recoger en local.\n\nEscribe *CONFIRMAR* para continuar con recogida.",
-  "restaurant_status": "⏱️ *Estado del restaurante:* {status}\n*Tiempo estimado:* {tiempo}"
+  "delivery_out_of_zone": "📦 *Fuera de zona*\n\nLo sentimos, solo entregamos en un radio de 100m. Puedes recoger en local.\n\nEscribe *CONFIRMAR* para continuar con recogida."
 }
