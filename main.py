@@ -216,7 +216,7 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
         
         # Verificar si es producto gratis (precio 0)
         if selected["price"] == 0:
-	    tiene_producto_pago = any(item["price"] > 0 for item in carts.get(user_id, []))
+            tiene_producto_pago = any(item["price"] > 0 for item in carts.get(user_id, []))
             if not tiene_producto_pago:
                 return f"📌 *{selected['dish_name']}* es GRATIS con la compra de una bebida u otro producto.\n\nPor favor, añade una bebida al carrito primero (ej: escribe '18' para Té a la menta - 10 MAD)"
        
