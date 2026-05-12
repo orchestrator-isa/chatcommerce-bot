@@ -681,10 +681,9 @@ Responde con el número de tu idioma:
                                 pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                                 continue
                             else:
-                                user_lang_code = user_lang[user_id]
-                                welcome_text = LanguageDetector.get_welcome(user_lang_code)
-                                combined = f"{welcome_text}\n\n{help_text}"
-                                await send_message(user_id, combined)
+				else:
+			        user_lang_code = user_lang[user_id]
+			        response = f"{LanguageDetector.get_welcome(user_lang_code)}\n\n{LanguageDetector.get_help(user_lang_code)}"
                                 continue
                         
                         elif fase == "seleccion_idioma":
