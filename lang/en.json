@@ -1,11 +1,15 @@
 {
-  "welcome": "👋 Hello! Welcome to El Reducto. Type *MENU* to see our dishes.",
+  "welcome": "👋 Hello! Welcome to Restinga Restaurant. Type *MENU* to see our dishes.",
   "help": "📋 *Commands*\n• *MENU* - View menu\n• *NUMBER* - Add dish\n• *QUANTITY* - E.g., '3 coke'\n• *ORDER* - View cart\n• *REMOVE X* - Remove dish\n• *CONFIRM* - Checkout",
   "cart_empty": "🛒 *Empty cart*\n\nType *MENU* to see our dishes.",
   "added_to_cart": "✅ *{cantidad} x {nombre}* added.\n💰 Subtotal: {total} MAD",
   "removed_item": "✅ *{cantidad} x {nombre}* removed.\n💰 New total: {total} MAD",
-  "delivery_type": "🚚 *Delivery type*\n\n• *1* - Pickup\n• *2* - Home delivery\n\nChoose an option:",
+  "delivery_type": "🚚 *Delivery type*\n\n• *1* - Pickup\n• *2* - Home delivery (100m radius)\n\nChoose an option:",
   "payment_method": "💳 *Payment method*\n\n• *1* - Cash\n• *2* - Bank transfer\n\nChoose an option:",
+  "cash_bill": "💰 *Cash payment*\n\nWhat bill will you pay with? (E.g., 50, 100, 200 MAD)",
+  "cash_no_change": "⚠️ *Sorry*\nWe don't have change for {bill} MAD. Can you pay with a smaller bill or card?",
   "order_confirmed": "✅ *ORDER CONFIRMED!*\n\n📋 *Order #: {numero}*\n💰 Total: {total} MAD\n💳 Method: {metodo}\n⏱️ Time: {tiempo}\n\n🙏 Thank you for your purchase!\n\nType *HELLO* for a new order.",
-  "address_request": "📍 *Delivery address*\n\nPlease write your full address:"
+  "address_request": "📍 *Delivery address*\n\nPlease write your full address:",
+  "delivery_zone_check": "📍 *Zone check*\n\nAre you within a 100m radius of the restaurant (2-3 blocks)?\n\nAnswer *YES* or *NO*:",
+  "delivery_out_of_zone": "📦 *Out of zone*\n\nWe only deliver within a 100m radius. You can pick up locally."
 }
