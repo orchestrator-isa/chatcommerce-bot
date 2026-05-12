@@ -216,11 +216,10 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
         
         # Verificar si es producto gratis (precio 0)
         if selected["price"] == 0:
-            # Verificar si ya hay una bebida en el carrito (precio > 0)
-            tiene_bebida = any(item["price"] > 0 for item in carts[user_id])
-            if not tiene_bebida:
+	    tiene_producto_pago = any(item["price"] > 0 for item in carts.get(user_id, []))
+            if not tiene_producto_pago:
                 return f"📌 *{selected['dish_name']}* es GRATIS con la compra de una bebida u otro producto.\n\nPor favor, añade una bebida al carrito primero (ej: escribe '18' para Té a la menta - 10 MAD)"
-        
+       
         for _ in range(cantidad):
             carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
         
@@ -679,16 +678,13 @@ async def process_message(body: dict):
 Responde con el número de tu idioma:
 """
                                 await send_message(user_id, lang_options)
-                                await registrar_mensaje(user_id, "outgoing", lang_options)
                                 pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                                 continue
                             else:
                                 user_lang_code = user_lang[user_id]
                                 welcome_text = LanguageDetector.get_welcome(user_lang_code)
-                                help_text = LanguageDetector.get_help(user_lang_code)
                                 combined = f"{welcome_text}\n\n{help_text}"
                                 await send_message(user_id, combined)
-                                await registrar_mensaje(user_id, "outgoing", combined)
                                 continue
                         
                         elif fase == "seleccion_idioma":
@@ -714,11 +710,9 @@ Responde con el número de tu idioma:
                             user_lang_code = user_lang.get(user_id, 'spanish')
                             menu_text, _ = await get_restaurant_menu(client_id, user_lang_code, waba=True)
                             await send_message(user_id, menu_text)
-                            await registrar_mensaje(user_id, "outgoing", menu_text)
                             await enviar_menu_pdf(user_id, user_lang_code)
                             help_text = LanguageDetector.get_help(user_lang_code)
                             await send_message(user_id, help_text)
-                            await registrar_mensaje(user_id, "outgoing", help_text)
                             continue
                         
                         elif text_lower in ['pedido', 'order', 'talab', 'طلب', 'cart']:
