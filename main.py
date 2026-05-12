@@ -616,46 +616,58 @@ async def process_message(body: dict):
                         fase = estado.get("fase", "inicio")
                         
                         # Manejo de fases del flujo
-                        if fase == "entrega":
-                            response = await procesar_entrega(user_id, text_lower, lang)
+                    if fase == "entrega":
+                        response = await procesar_entrega(user_id, text_lower, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "direccion":
+                        response = await procesar_direccion(user_id, text, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "pago":
+                        response = await procesar_pago(user_id, text_lower, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "cash_bill":
+                        response = await procesar_billete(user_id, text, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "confirmar_pedido":
+                        response = await procesar_tarjeta(user_id, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "transfer_pending":
+                        response = await procesar_transferencia(user_id, lang)
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "pago_recoger_forzado":
+                        if text_lower in ['confirmar', 'confirm']:
+                            pedido_estado[user_id]["fase"] = "pago"
+                            response = get_text(lang, 'payment_method')
+                        else:
+                            response = "Escribe *CONFIRMAR* para continuar con recogida."
+                        await send_message(user_id, response)
+                        await registrar_mensaje(user_id, "outgoing", response)
+                        continue
+                    elif fase == "seleccion_idioma":
+                        idiomas = {'1': 'spanish', '2': 'english', '3': 'french', '4': 'darija_latin', '5': 'darija_arabic'}
+                        if text in idiomas:
+                            user_lang[user_id] = idiomas[text]
+                            user_idioma_manual[user_id] = True
+                            response = f"{LanguageDetector.get_welcome(user_lang[user_id])}\n\n{LanguageDetector.get_help(user_lang[user_id])}"
                             await send_message(user_id, response)
                             await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "check_zona":
-                            response = await procesar_zona(user_id, text, lang)
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "direccion":
-                            response = await procesar_direccion(user_id, text, lang)
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "pago":
-                            response = await procesar_pago(user_id, text_lower, lang)
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "cash_bill":
-                            response = await procesar_billete(user_id, text, lang)
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "transfer_pending":
-                            response = await procesar_transferencia(user_id, lang)
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        elif fase == "pago_recoger_forzado":
-                            if text_lower in ['confirmar', 'confirm']:
-                                pedido_estado[user_id]["fase"] = "pago"
-                                response = get_text(lang, 'payment_method')
-                            else:
-                                response = "Escribe *CONFIRMAR* para continuar con recogida."
-                            await send_message(user_id, response)
-                            await registrar_mensaje(user_id, "outgoing", response)
-                            continue
-                        
+                            if user_id in pedido_estado:
+                                del pedido_estado[user_id]
+                        else:
+                            await send_message(user_id, "❌ Opción no válida. Elige un número del 1 al 5.")
+                        continue
                         # Comandos principales
                         if text_lower in ['hola', 'salam', 'hello', 'hi', 'bonjour', 'hallo', 'merhaba', 'سلام']:
                             if user_id in carts:
@@ -681,11 +693,8 @@ Responde con el número de tu idioma:
                                 pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                                 continue
                             else:
-				else:
-			        user_lang_code = user_lang[user_id]
-			        response = f"{LanguageDetector.get_welcome(user_lang_code)}\n\n{LanguageDetector.get_help(user_lang_code)}"
-                                continue
-                        
+                                user_lang_code = user_lang[user_id]
+                            response = f"{LanguageDetector.get_welcome(user_lang_code)}\n\n{LanguageDetector.get_help(user_lang_code)}"
                         elif fase == "seleccion_idioma":
                             idiomas = {
                                 '1': 'spanish', '2': 'english', '3': 'french',
