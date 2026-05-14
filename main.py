@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+LanguageDetector#!/usr/bin/env python3
 import os, logging, re, json, uuid, httpx
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -126,8 +126,254 @@ class LanguageDetector:
 
 # ========== MENÚ, CARRITO, PEDIDOS (resumido para brevedad - mantener tu lógica existente) ==========
 # [Mantén tus funciones get_restaurant_menu, add_to_cart, guardar_pedido, etc. SIN CAMBIOS]
-# Solo asegúrate de NO usar 'await' con supabase.table()
+# ========== FUNCIONES DE MENÚ, CARRITO Y PEDIDOS ==========
+# ========== FUNCIONES DE MENÚ, CARRITO Y PEDIDOS ==========
+# ⚠️ IMPORTANTE: Cliente Supabase es SÍNCRONO → NO usar 'await' con supabase.table()
 
+async def get_restaurant_menu(client_id: str, user_lang_code: str = 'spanish', waba: bool = True) -> tuple:
+    """Obtiene menú desde Supabase, formateado para WhatsApp"""
+    try:
+        if not supabase:
+            return "❌ Error de conexión", []
+        
+        # Consulta SÍNCRONA (sin await)
+        query = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True)
+        
+        # Para WABA, ocultar productos que no deben mostrarse
+        if waba:
+            query = query.eq("show_on_waba", True)
+        
+        result = query.execute()
+        
+        if not result.data:
+            return "📋 *MENÚ*\nNo hay platos disponibles.", []
+        
+        menu_lines = ["📋 *MENÚ RESTINGA*", ""]
+        for i, item in enumerate(result.data, 1):
+            if item['price'] == 0:
+                menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — 🆓 GRATIS con bebida")
+            else:
+                menu_lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {item['price']} MAD")
+            if item.get('description'):
+                menu_lines.append(f"   📝 {item['description']}")
+            menu_lines.append("")
+        
+        return "\n".join(menu_lines), result.data
+        
+    except Exception as e:
+        logger.error(f"Error menú: {e}")
+        return "❌ Error cargando menú", []
+
+
+async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: str, lang: str) -> str:
+    """Añade producto al carrito virtual"""
+    try:
+        _, platos = await get_restaurant_menu(client_id, lang, waba=True)
+        if not platos or item_index > len(platos):
+            return get_text(lang, 'help')
+        
+        selected = platos[item_index - 1]
+        
+        if user_id not in carts:
+            carts[user_id] = []
+        
+        # Verificar si es producto gratis (precio 0)
+        if selected["price"] == 0:
+            tiene_producto_pago = any(item["price"] > 0 for item in carts.get(user_id, []))
+            if not tiene_producto_pago:
+                return f"📌 *{selected['dish_name']}* es GRATIS con la compra de una bebida u otro producto.\nPor favor, añade una bebida al carrito primero (ej: escribe '18' para Té a la menta - 10 MAD)"
+        
+        for _ in range(cantidad):
+            carts[user_id].append({"name": selected["dish_name"], "price": selected["price"]})
+        
+        total = sum(item["price"] for item in carts[user_id])
+        return get_text(lang, 'added_to_cart',
+                       cantidad=cantidad,
+                       nombre=selected['dish_name'],
+                       total=total)
+    except Exception as e:
+        logger.error(f"Error carrito: {e}")
+        return "❌ Error al añadir"
+
+
+async def get_cart(user_id: str, lang: str) -> str:
+    """Muestra contenido del carrito"""
+    if user_id not in carts or not carts[user_id]:
+        return get_text(lang, 'cart_empty')
+    
+    items_dict = {}
+    for item in carts[user_id]:
+        name = item["name"]
+        if name not in items_dict:
+            items_dict[name] = {"price": item["price"], "cantidad": 0}
+        items_dict[name]["cantidad"] += 1
+    
+    total = sum(item["price"] for item in carts[user_id])
+    item_lines = []
+    for name, data in items_dict.items():
+        if data["price"] == 0:
+            item_lines.append(f"• {name} — 🆓 GRATIS (con bebida)")
+        elif data["cantidad"] > 1:
+            item_lines.append(f"• {name} x{data['cantidad']} — {data['cantidad'] * data['price']} MAD")
+        else:
+            item_lines.append(f"• {name} — {data['price']} MAD")
+    
+    items_text = "\n".join(item_lines)
+    return f"🛒 *TU PEDIDO*\n{items_text}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
+
+
+async def iniciar_entrega(user_id: str, lang: str) -> str:
+    """Inicia flujo de selección de entrega"""
+    pedido_estado[user_id] = {"fase": "entrega"}
+    return get_text(lang, 'delivery_type')
+
+
+async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
+    global restaurant_status
+    if text == '1':
+        pedido_estado[user_id]["tipo_entrega"] = "recoger"
+        pedido_estado[user_id]["fase"] = "pago"
+        total = sum(item["price"] for item in carts.get(user_id, []))
+        tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])["recoger"]
+        status_text = {"normal": "🟢 Normal", "moderado": "🟡 Moderado", "lleno": "🔴 Lleno"}.get(restaurant_status, "🟢 Normal")
+        return f"✅ *Recogida en local*\n📊 Estado: {status_text}\n⏱️ Tiempo estimado: {tiempo}\n💰 Total: {total} MAD\n{get_text(lang, 'payment_method')}"
+    elif text == '2':
+        pedido_estado[user_id]["tipo_entrega"] = "domicilio"
+        pedido_estado[user_id]["fase"] = "check_zona"
+        return get_text(lang, 'delivery_zone_check')
+    return "❌ Opción no válida. Escribe *1* (Recoger) o *2* (Domicilio)."
+
+
+async def procesar_zona(user_id: str, text: str, lang: str) -> str:
+    text_lower = text.lower().strip()
+    if text_lower in ['si', 'sí', 'yes', 'oui']:
+        pedido_estado[user_id]["fase"] = "direccion"
+        return get_text(lang, 'address_request')
+    else:
+        pedido_estado[user_id]["fase"] = "pago_recoger_forzado"
+        return get_text(lang, 'delivery_out_of_zone')
+
+
+async def procesar_direccion(user_id: str, direccion: str, lang: str) -> str:
+    pedido_estado[user_id]["direccion"] = direccion
+    pedido_estado[user_id]["fase"] = "pago"
+    total = sum(item["price"] for item in carts.get(user_id, []))
+    return f"📍 Dirección guardada.\n💰 Total: {total} MAD\n{get_text(lang, 'payment_method')}"
+
+
+async def procesar_pago(user_id: str, text: str, lang: str) -> str:
+    if text == '1':  # Efectivo
+        pedido_estado[user_id]["metodo_pago"] = "efectivo"
+        pedido_estado[user_id]["fase"] = "cash_bill"
+        return get_text(lang, 'cash_bill')
+    elif text == '2':  # Transferencia
+        if user_id not in clientes_validados and user_id not in ['212668087490', '212626282904']:
+            return get_text(lang, 'transfer_unverified')
+        pedido_estado[user_id]["metodo_pago"] = "transferencia"
+        pedido_estado[user_id]["fase"] = "transfer_pending"
+        return get_text(lang, 'transfer_pending')
+    return "❌ Opción no válida. Escribe *1* (Efectivo) o *2* (Transferencia)."
+
+
+async def procesar_billete(user_id: str, text: str, lang: str) -> str:
+    global restaurant_status
+    try:
+        billete = int(text)
+        if billete in [100, 200] and restaurant_status == "lleno":
+            return get_text(lang, 'cash_no_change', bill=billete)
+        
+        pedido_estado[user_id]["billete"] = str(billete)
+        total = sum(item["price"] for item in carts.get(user_id, []))
+        
+        if total <= 0:
+            return "⚠️ *No se puede confirmar el pedido*\nEl total es 0 MAD. Por favor, añade productos con precio antes de confirmar."
+        
+        cambio = billete - total
+        if cambio < 0:
+            return f"⚠️ *El billete de {billete} MAD no es suficiente.*\nEl total es {total} MAD. Por favor, usa un billete más grande."
+        
+        tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
+        tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
+        
+        # Limpieza post-pedido
+        carts[user_id] = []
+        if user_id in pedido_estado:
+            del pedido_estado[user_id]
+        
+        metodo_texto = f"Efectivo con {billete} MAD" + (f" (cambio: {cambio} MAD)" if cambio > 0 else "")
+        return get_text(lang, 'order_confirmed',
+                       numero="107",
+                       total=total,
+                       metodo=metodo_texto,
+                       tiempo=tiempo)
+    except ValueError:
+        return "❌ Por favor, responde con el número del billete (ej: 50, 100, 200)"
+
+
+async def procesar_transferencia(user_id: str, lang: str) -> str:
+    global restaurant_status
+    total = sum(item["price"] for item in carts.get(user_id, []))
+    
+    if total <= 0:
+        return "⚠️ *No se puede confirmar el pedido*\nEl total es 0 MAD."
+    
+    tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
+    tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
+    
+    # Limpieza post-pedido
+    carts[user_id] = []
+    if user_id in pedido_estado:
+        del pedido_estado[user_id]
+    
+    return get_text(lang, 'order_confirmed',
+                   numero="107",
+                   total=total,
+                   metodo="Transferencia (pendiente validación)",
+                   tiempo=tiempo)
+
+
+# Funciones auxiliares para carrito
+async def remove_from_cart_by_name(user_id: str, nombre_buscar: str, lang: str) -> str:
+    if user_id not in carts or not carts[user_id]:
+        return get_text(lang, 'cart_empty')
+    
+    nombre_buscar_lower = nombre_buscar.lower().strip()
+    eliminados = []
+    nuevos_items = []
+    
+    for item in carts[user_id]:
+        if nombre_buscar_lower in item["name"].lower():
+            eliminados.append(item)
+        else:
+            nuevos_items.append(item)
+    
+    if not eliminados:
+        return f"❌ No encontré '{nombre_buscar}' en tu carrito."
+    
+    carts[user_id] = nuevos_items
+    total = sum(item["price"] for item in carts[user_id])
+    cantidad = len(eliminados)
+    nombre = eliminados[0]["name"]
+    
+    return get_text(lang, 'removed_item', cantidad=cantidad, nombre=nombre, total=total)
+
+
+async def remove_from_cart_by_index(user_id: str, item_index: int, lang: str) -> str:
+    if user_id not in carts or not carts[user_id]:
+        return get_text(lang, 'cart_empty')
+    if item_index < 1 or item_index > len(carts[user_id]):
+        return f"❌ Número inválido. El carrito tiene {len(carts[user_id])} platos."
+    
+    removed = carts[user_id].pop(item_index - 1)
+    total = sum(item["price"] for item in carts[user_id])
+    return get_text(lang, 'removed_item', cantidad=1, nombre=removed['name'], total=total)
+
+
+async def clear_cart(user_id: str, lang: str) -> str:
+    if user_id in carts:
+        carts[user_id] = []
+        return "🗑️ *Carrito vaciado* completamente."
+    return get_text(lang, 'cart_empty')
 # ========== ENVIAR MENSAJE WHATSAPP (CORREGIDO) ==========
 async def send_message(to: str, message: str) -> bool:
     """Envía mensaje vía WhatsApp Cloud API con confirmación de éxito/fallo"""
