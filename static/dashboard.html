@@ -1,93 +1,144 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Dashboard - El Reducto</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Restinga</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
-        h1 { color: #22d3ee; margin-bottom: 20px; }
-        .pedido { background: #1e293b; border-radius: 12px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #22d3ee; }
-        .pedido.nuevo { border-left-color: #fbbf24; }
-        .pedido.confirmado { border-left-color: #4ade80; }
-        .pedido.listo { border-left-color: #22d3ee; }
-        .numero { font-size: 1.3rem; font-weight: bold; color: #22d3ee; }
-        .estado { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; margin-left: 10px; }
-        .estado-nuevo { background: #fbbf24; color: #0f172a; }
-        .estado-confirmado { background: #4ade80; color: #0f172a; }
-        .estado-listo { background: #22d3ee; color: #0f172a; }
-        .total { font-size: 1.2rem; font-weight: bold; color: #fbbf24; margin-top: 10px; }
-        .btn { background: #0891b2; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; margin-top: 10px; margin-right: 10px; }
-        .btn:hover { background: #06b6d4; }
-        .refresh { background: #334155; margin-bottom: 20px; }
-        .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        :root { --bg: #f0f2f5; --card: #fff; --primary: #27ae60; --warn: #f39c12; --danger: #e74c3c; --text: #2c3e50; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: var(--bg); color: var(--text); }
+        .container { max-width: 1000px; margin: auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 1.5rem; }
+        .status-toggles { display: flex; gap: 10px; margin-bottom: 20px; }
+        .btn { padding: 10px 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+        .btn.active { box-shadow: 0 0 0 3px rgba(0,0,0,0.2); }
+        .btn-n { background: #27ae60; color: white; }
+        .btn-m { background: #f39c12; color: white; }
+        .btn-l { background: #e74c3c; color: white; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .card { background: var(--card); padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .card h3 { margin: 0 0 10px 0; font-size: 1rem; color: #555; }
+        .card .val { font-size: 1.8rem; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 10px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: 600; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8em; color: white; }
+        .b-nuevo { background: #3498db; } .b-confirmado { background: #27ae60; } .b-cocina { background: #f39c12; } .b-listo { background: #9b59b6; } .b-entregado { background: #7f8c8d; }
+        #loading { text-align: center; padding: 40px; color: #666; }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
-    <h1>📋 Dashboard - El Reducto</h1>
-    <div class="flex">
-        <button class="btn refresh" onclick="cargarPedidos()">🔄 Actualizar</button>
-        <select id="filtro" onchange="cargarPedidos()" style="background:#1e293b; color:white; padding:8px; border-radius:8px; border:1px solid #334155;">
-            <option value="">Todos los estados</option>
-            <option value="nuevo">🆕 Nuevos</option>
-            <option value="confirmado">✅ Confirmados</option>
-            <option value="listo">🍽️ Listos</option>
-            <option value="entregado">📦 Entregados</option>
-        </select>
+    <div class="container">
+        <header>
+            <h1>📋 Dashboard - Restinga</h1>
+            <button class="btn" onclick="fetchData()" style="background:#34495e;color:white">🔄 Actualizar</button>
+        </header>
+
+        <div class="status-toggles">
+            <span style="align-self:center;font-weight:600">Estado Restaurante:</span>
+            <button class="btn btn-n" onclick="setStatus('normal')">🟢 Normal</button>
+            <button class="btn btn-m" onclick="setStatus('moderado')">🟡 Moderado</button>
+            <button class="btn btn-l" onclick="setStatus('lleno')">🔴 Lleno</button>
+        </div>
+
+        <div id="loading">Cargando datos...</div>
+        <div id="dashboard" class="hidden">
+            <div class="grid">
+                <div class="card"><h3>🆕 Nuevos</h3><div class="val" id="st-new">0</div></div>
+                <div class="card"><h3>✅ Confirmados</h3><div class="val" id="st-conf">0</div></div>
+                <div class="card"><h3>💰 Ventas Hoy</h3><div class="val" id="st-sales">0 MAD</div></div>
+                <div class="card"><h3>⏱️ Tiempo Medio</h3><div class="val" id="st-time">--</div></div>
+            </div>
+
+            <h2 style="margin:20px 0 10px">📦 Lista de Pedidos</h2>
+            <table>
+                <thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Tipo</th><th>Pago</th><th>Estado</th></tr></thead>
+                <tbody id="orders-table"></tbody>
+            </table>
+        </div>
     </div>
-    <div id="pedidos-container" style="margin-top: 20px;">Cargando...</div>
 
     <script>
-        async function cargarPedidos() {
-            const filtro = document.getElementById('filtro').value;
-            let url = '/api/pedidos';
-            if (filtro) url += `?estado=${filtro}`;
-            
+        const API = '/api';
+        const PASS = prompt('🔐 Contraseña del dashboard:') || '';
+
+        if (PASS !== 'restinga2026') {
+            document.body.innerHTML = '<div style="text-align:center;margin-top:50px"><h1>🔒 Acceso Denegado</h1><p>Contraseña incorrecta.</p></div>';
+            throw new Error('Auth failed');
+        }
+
+        async function fetchData() {
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('dashboard').classList.add('hidden');
             try {
-                const res = await fetch(url);
-                const data = await res.json();
-                const container = document.getElementById('pedidos-container');
-                
-                if (!data.pedidos || data.pedidos.length === 0) {
-                    container.innerHTML = '<div class="pedido">📭 No hay pedidos aún.</div>';
-                    return;
-                }
-                
-                container.innerHTML = data.pedidos.map(p => {
-                    let items = [];
-                    if (p.items_json) {
-                        items = p.items_json;
-                    } else if (p.items) {
-                        items = p.items;
-                    }
-                    return `
-                    <div class="pedido ${p.estado}">
-                        <div class="flex" style="justify-content: space-between;">
-                            <div>
-                                <span class="numero">#${p.numero}</span>
-                                <span class="estado estado-${p.estado}">${p.estado.toUpperCase()}</span>
-                            </div>
-                            <div style="color:#94a3b8; font-size:0.8rem;">${new Date(p.created_at || p.fecha_creacion).toLocaleTimeString()}</div>
-                        </div>
-                        <div style="margin-top: 10px;">
-                            ${items.map(i => `<div>🍽️ ${i.cantidad || 1}x ${i.name || i.nombre} — ${(i.price || i.precio) * (i.cantidad || 1)} MAD</div>`).join('')}
-                        </div>
-                        <div class="total">💰 Total: ${p.total_mad || p.total} MAD</div>
-                        <div style="color:#94a3b8; font-size:0.8rem; margin-top:8px;">
-                            📞 ${p.cliente_telefono || p.id_cliente || 'No disponible'} | 
-                            🚚 ${p.tipo_entrega || 'No especificado'} | 
-                            💳 ${p.metodo_pago || 'Efectivo'}
-                        </div>
-                    </div>
-                `}).join('');
-            } catch (error) {
-                document.getElementById('pedidos-container').innerHTML = '<div class="pedido">❌ Error al cargar pedidos. Asegurate de que el servidor esté corriendo.</div>';
+                // 1. Estado actual
+                const health = await fetch(`${API}/health`).then(r => r.json());
+                highlightStatus(health.restaurant_status || 'normal');
+
+                // 2. Pedidos
+                const res = await fetch(`${API}/orders`).then(r => r.json());
+                const orders = res.data || [];
+                renderOrders(orders);
+                renderStats(orders);
+
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('dashboard').classList.remove('hidden');
+            } catch (e) {
+                document.getElementById('loading').innerHTML = `❌ Error: ${e.message}<br><small>Verifica que /api/orders esté activo en main.py</small>`;
             }
         }
-        
-        cargarPedidos();
-        setInterval(cargarPedidos, 30000);
+
+        async function setStatus(status) {
+            try {
+                await fetch(`${API}/restaurant/status`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status })
+                });
+                highlightStatus(status);
+                fetchData();
+            } catch(e) { alert('Error cambiando estado'); }
+        }
+
+        function highlightStatus(s) {
+            document.querySelectorAll('.status-toggles .btn').forEach(b => b.classList.remove('active'));
+            const map = {'normal':0, 'moderado':1, 'lleno':2};
+            if(map[s]!==undefined) document.querySelectorAll('.status-toggles .btn')[map[s]].classList.add('active');
+        }
+
+        function renderOrders(orders) {
+            const tbody = document.getElementById('orders-table');
+            tbody.innerHTML = '';
+            if(orders.length===0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">No hay pedidos registrados hoy.</td></tr>';
+                return;
+            }
+            orders.forEach(o => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>#${o.numero || o.id.slice(0,6)}</td>
+                    <td>${o.cliente_telefono?.slice(-4) || '---'}</td>
+                    <td>${o.total_mad} MAD</td>
+                    <td>${o.tipo_entrega || 'recoger'}</td>
+                    <td>${o.metodo_pago || 'efectivo'}</td>
+                    <td><span class="badge b-${o.estado}">${o.estado}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderStats(orders) {
+            const today = new Date().toISOString().split('T')[0];
+            const todayOrders = orders.filter(o => o.created_at?.startsWith(today));
+            document.getElementById('st-new').textContent = todayOrders.filter(o=>o.estado==='nuevo').length;
+            document.getElementById('st-conf').textContent = todayOrders.filter(o=>o.estado==='confirmado').length;
+            document.getElementById('st-sales').textContent = todayOrders.reduce((a,b)=>a+(b.total_mad||0),0) + ' MAD';
+            document.getElementById('st-time').textContent = '--'; // Se calcula con timestamps reales
+        }
+
+        fetchData();
     </script>
 </body>
 </html>
