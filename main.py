@@ -82,8 +82,12 @@ async def load_phone_mapping():
             for r in result.data: clientes_validados.add(r.get("telefono", ""))
         except: pass
         logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
-    except Exception as e: logger.error(f"Error mapeo: {e}")
-
+        except Exception as e: logger.error(f"Error mapeo: {e}")
+        # Al final de load_phone_mapping():
+        phone_to_restaurant['212626282904'] = '44444444-4444-4444-4444-444444444444'  # WAB Principal
+        phone_to_restaurant['212668087490'] = '44444444-4444-4444-4444-444444444444'  # Restinga Restaurant
+        # 🔑 AGREGA ESTO para números internacionales que prueben el bot:
+        phone_to_restaurant['5217225529803'] = '44444444-4444-4444-4444-444444444444'  # Tu número de prueba (México)
 # ========== REGISTRAR MENSAJE (con fallback PGRST204) ==========
 async def registrar_mensaje(user_id: str, direccion: str, mensaje: str, intent: str=None):
     try:
@@ -146,6 +150,7 @@ async def send_message(to: str, message: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, headers=headers, json=data)
+            logger.info(f"📡 WhatsApp API response: {response.status_code} | {response.text[:200]}")
             
             if response.status_code == 200:
                 try:
@@ -168,43 +173,207 @@ async def send_message(to: str, message: str) -> bool:
 
 # ========== PROCESAR MENSAJE (con logging de fallback) ==========
 async def process_message(body: dict):
+logger.info(f"🔍 Debug: user_id={user_id}, text='{text[:50]}', client_id={client_id}, lang={user_lang_code}")
     try:
-        if body.get("object") != "whatsapp_business_account": return
+        if body.get("object") != "whatsapp_business_account":
+            return
         for entry in body.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
                 metadata = value.get("metadata", {})
                 display_phone = metadata.get("display_phone_number", "").replace("+", "")
-                client_id = phone_to_restaurant.get(display_phone, "44444444-4444-4444-4444-444444444444")
+                
+                # 🔑 CRÍTICO: Resolver client_id para Restinga (fallback si no está mapeado)
+                client_id = phone_to_restaurant.get(display_phone) or phone_to_restaurant.get('212626282904') or "44444444-4444-4444-4444-444444444444"
+                
                 for msg in value.get("messages", []):
                     if msg.get("type") == "text":
                         user_id = msg.get("from")
                         text = msg.get("text", {}).get("body", "")
                         text_lower = text.lower().strip()
+                        
+                        # Detectar idioma
                         lang = LanguageDetector.detect(text)
+                        user_lang_code = user_lang.get(user_id, lang)
+                        
+                        # Registrar mensaje entrante
                         await registrar_mensaje(user_id, "incoming", text)
                         
-                        # Respuesta simple de prueba (puedes expandir con tu lógica completa)
-                        if text_lower in ['hola','hello','salam','hi']:
-                            response = f"{LanguageDetector.get_welcome(lang)}\n{LanguageDetector.get_help(lang)}"
-                        elif text_lower in ['menu','menú']:
-                            response = "📋 *MENÚ*\nEscribe un número para añadir al carrito.\nEj: '1' para Zaalouk"
-                        else:
-                            response = LanguageDetector.get_help(lang)
+                        # Obtener estado actual del usuario
+                        estado = pedido_estado.get(user_id, {})
+                        fase = estado.get("fase", "inicio")
                         
-                        # Enviar respuesta con confirmación de éxito/fallo
-                        sent = await send_message(user_id, response)
-                        logger.info(f"📤 send_message result: {sent} | to: {user_id[:10]}... | msg: {response[:50]}...")
-                        if not sent:
-                            logger.warning(f"⚠️ NO se pudo enviar respuesta a {user_id}")			
-                        if sent:
+                        # ========== MANEJO DE FASES DEL FLUJO ==========
+                        if fase == "seleccion_idioma":
+                            idiomas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
+                            if text in idiomas:
+                                user_lang[user_id] = idiomas[text]
+                                user_idioma_manual[user_id] = True
+                                response = f"{LanguageDetector.get_welcome(user_lang[user_id])}\n{LanguageDetector.get_help(user_lang[user_id])}"
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                                if user_id in pedido_estado: del pedido_estado[user_id]
+                            else:
+                                await send_message(user_id, "❌ Opción no válida. Elige 1-5.")
+                            continue
+                        
+                        if fase == "entrega":
+                            response = await procesar_entrega(user_id, text_lower, user_lang_code)
+                            await send_message(user_id, response)
                             await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        if fase == "check_zona":
+                            response = await procesar_zona(user_id, text_lower, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        if fase == "direccion":
+                            response = await procesar_direccion(user_id, text, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        if fase == "pago":
+                            response = await procesar_pago(user_id, text_lower, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        if fase == "cash_bill":
+                            response = await procesar_billete(user_id, text, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        if fase == "transfer_pending":
+                            response = await procesar_transferencia(user_id, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # ========== COMANDOS PRINCIPALES ==========
+                        
+                        # 👋 Saludos / Inicio
+                        if text_lower in ['hola','hello','salam','hi','bonjour','hallo','merhaba','سلام']:
+                            # Limpiar estado previo
+                            if user_id in carts: carts[user_id] = []
+                            if user_id in pedido_estado: del pedido_estado[user_id]
+                            
+                            # Si no tiene idioma seleccionado, mostrar opciones
+                            if user_id not in user_lang or not user_idioma_manual.get(user_id, False):
+                                lang_options = """🌍 *Bienvenido a Restinga Restaurant*
+*Selecciona tu idioma / Choose your language:*
+1. 🇪🇸 Español
+2. 🇬🇧 English  
+3. 🇫🇷 Français
+4. 🇲🇦 Darija
+5. 🇲🇦 العربية
+Responde con el número de tu idioma:"""
+                                await send_message(user_id, lang_options)
+                                pedido_estado[user_id] = {"fase": "seleccion_idioma"}
+                            else:
+                                response = f"{LanguageDetector.get_welcome(user_lang_code)}\n{LanguageDetector.get_help(user_lang_code)}"
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # 📋 Menú
+                        elif text_lower in ['menu','menú']:
+                            menu_text, platos = await get_restaurant_menu(client_id, user_lang_code, waba=True)
+                            await send_message(user_id, menu_text)
+                            # Opcional: enviar PDF
+                            # await enviar_menu_pdf(user_id, user_lang_code)
+                            help_text = LanguageDetector.get_help(user_lang_code)
+                            await send_message(user_id, help_text)
+                            await registrar_mensaje(user_id, "outgoing", menu_text[:200]+"...")
+                            continue
+                        
+                        # 🛒 Carrito / Pedido
+                        elif text_lower in ['pedido','order','cart','carrito']:
+                            response = await get_cart(user_id, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # ✅ Confirmar pedido
+                        elif text_lower in ['confirmar','confirm','checkout']:
+                            total = sum(item["price"] for item in carts.get(user_id, []))
+                            if total <= 0:
+                                response = "⚠️ *No se puede confirmar*\nTu carrito está vacío o el total es 0 MAD."
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                                continue
+                            if user_id in carts and carts[user_id]:
+                                response = await iniciar_entrega(user_id, user_lang_code)
+                            else:
+                                response = get_text(user_lang_code, 'cart_empty')
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # ❓ Ayuda
+                        elif text_lower in ['help','ayuda','aide','commands']:
+                            response = LanguageDetector.get_help(user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # 🔢 Números (añadir al carrito)
+                        elif text_lower.isdigit():
+                            item_index = int(text_lower)
+                            response = await add_to_cart(user_id, item_index, 1, client_id, user_lang_code)
+                            await send_message(user_id, response)
+                            await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # 🗑️ Eliminar del carrito
+                        elif re.match(r'(eliminar|quitar|borrar|remove)\s+', text_lower):
+                            parts = text_lower.split(maxsplit=1)
+                            if len(parts) > 1:
+                                resto = parts[1].strip()
+                                if resto == 'todo' or resto == 'all':
+                                    response = await clear_cart(user_id, user_lang_code)
+                                elif resto.isdigit():
+                                    response = await remove_from_cart_by_index(user_id, int(resto), user_lang_code)
+                                else:
+                                    response = await remove_from_cart_by_name(user_id, resto, user_lang_code)
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                        
+                        # 🔄 Fallback: mensaje no reconocido
                         else:
-                            # Fallback: registrar que no se pudo enviar
-                            logger.warning(f"⚠️ No se pudo enviar respuesta a {user_id}")
-                            await registrar_mensaje(user_id, "outgoing_failed", f"[NO ENVIADO] {response[:100]}")
+                            # Intentar detectar "cantidad + nombre" ej: "2 pastilla"
+                            match = re.match(r'(\d+)\s+(.+)', text_lower)
+                            if match:
+                                cantidad = int(match.group(1))
+                                nombre = match.group(2).strip()
+                                _, platos = await get_restaurant_menu(client_id, user_lang_code, waba=True)
+                                for i, plato in enumerate(platos, 1):
+                                    if nombre in plato['dish_name'].lower():
+                                        response = await add_to_cart(user_id, i, cantidad, client_id, user_lang_code)
+                                        await send_message(user_id, response)
+                                        await registrar_mensaje(user_id, "outgoing", response)
+                                        break
+                                else:
+                                    response = LanguageDetector.get_help(user_lang_code)
+                                    await send_message(user_id, response)
+                            else:
+                                response = LanguageDetector.get_help(user_lang_code)
+                                await send_message(user_id, response)
+                                await registrar_mensaje(user_id, "outgoing", response)
+                            continue
+                            
     except Exception as e:
         logger.error(f"❌ Error en process_message: {e}", exc_info=True)
+        # Registrar error en BD
+        if supabase:
+            try:
+                supabase.table("logs_registro").insert({
+                    "level": "ERROR",
+                    "message": str(e)[:500],
+                    "source": "process_message",
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+            except: pass
+
 
 # ========== WEBHOOK WHATSAPP ==========
 @app.get("/api/whatsapp/webhook")
