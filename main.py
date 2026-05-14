@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+[object Object]#!/usr/bin/env python3
 import os, logging, re, json, uuid, httpx
 from datetime import datetime
 from pathlib import Path
@@ -50,7 +50,14 @@ def get_text(lang_code: str, key: str, **kwargs) -> str:
     file_key = LANG_MAP.get(lang_code, 'es')
     texts = LANGUAGES.get(file_key, LANGUAGES.get('es', {}))
     template = texts.get(key, LANGUAGES['es'].get(key, key))
-    return template.format(**kwargs) if kwargs and '{}' in template else template
+    
+    if kwargs:
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError):
+            # Si falla el formato, devuelve el template original para no romper el flujo
+            return template
+    return template
 
 # ========== ESTADOS GLOBALES ==========
 carts: Dict[str, List[dict]] = {}
