@@ -477,7 +477,7 @@ async def process_message(body: dict):
                                 except Exception as e:
                                     logger.warning(f"⚠️ Reservas: {e}")
                             # Confirmar al usuario
-                            await send_message(user_id, f"✅ *Solicitud recibida*\n👥 {pedido_estado[user_id]['people']} personas | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Te confirmaremos breve tiempo estimado en 10 minutos si hay disponibilidad.")
+                            await send_message(user_id, f"✅ *Solicitud recibida*\n👥 {pedido_estado[user_id]['people']} personas | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Te confirmaremos en ≤10 minutos si hay disponibilidad.")
                             # Notificar a recepción
                             await send_message('212668087490', f"🆕 *Nueva reserva pendiente*\n👥 {pedido_estado[user_id]['people']} pax | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Cliente: {user_id}")
                             pedido_estado.pop(user_id, None)
@@ -527,7 +527,7 @@ async def startup():
     await load_phone_mapping()
     if supabase: supabase.table("messages").select("id").limit(1).execute()
     logger.info(f"✅ {len(LANGUAGES)} languages loaded: {list(LANGUAGES.keys())}")
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
