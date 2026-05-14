@@ -434,13 +434,63 @@ async def process_message(body: dict):
                             await send_message(user_id, resp)
                             await registrar_mensaje(user_id, "outgoing", resp)
                         continue
+                    elif text_lower in ['reservar','reservación','reservation','book','table']:
+                        pedido_estado[user_id] = {"fase": "reserva_personas"}
+                        await send_message(user_id, "📅 *Reservar mesa en Restinga*\n¿Para cuántas personas? (1-20)")
+                        continue
                     
-                    else:
-                        await send_message(user_id, LanguageDetector.get_help(lang))
-                        
-    except Exception as e:
-        logger.error(f"❌ Error process_message: {e}", exc_info=True)
-
+                    elif fase == "reserva_personas":
+                        if text_lower.isdigit() and 1 <= int(text_lower) <= 20:
+                            pedido_estado[user_id]["people"] = int(text_lower)
+                            pedido_estado[user_id]["fase"] = "reserva_fecha"
+                            await send_message(user_id, "🕐 ¿Para qué día y hora?\nEj: 'Mañana 20:00' o '15/05 21:30'")
+                        else:
+                            await send_message(user_id, "❌ Por favor, escribe un número entre 1 y 20.")
+                        continue
+                    
+                    elif fase == "reserva_fecha":
+                        # Parseo simple: aceptar "15/05 21:30" o "Mañana 20:00"
+                        try:
+                            if "mañana" in text_lower or "manana" in text_lower:
+                                from datetime import timedelta
+                                fecha = (datetime.now() + timedelta(days=1)).date()
+                            else:
+                                # Intentar parsear "DD/MM HH:MM"
+                                partes = text_lower.split()
+                                fecha_str, hora_str = partes[0], partes[1] if len(partes)>1 else "20:00"
+                                dia, mes = map(int, fecha_str.split('/'))
+                                fecha = datetime.now().replace(day=dia, month=mes).date()
+                                hora_str = hora_str.replace(':', '')
+                                hora, minuto = int(hora_str[:2]), int(hora_str[2:4]) if len(hora_str)>=4 else 0
+                            # Guardar reserva (fallback si tabla no existe)
+                            if supabase:
+                                try:
+                                    supabase.table("reservations").insert({
+                                        "client_id": client_id,
+                                        "cliente_telefono": user_id,
+                                        "people_count": pedido_estado[user_id]["people"],
+                                        "reservation_date": fecha.isoformat(),
+                                        "reservation_time": f"{hora:02d}:{minuto:02d}:00",
+                                        "status": "pending",
+                                        "created_at": datetime.now().isoformat()
+                                    }).execute()
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Reservas: {e}")
+                            # Confirmar al usuario
+                            await send_message(user_id, f"✅ *Solicitud recibida*\n👥 {pedido_estado[user_id]['people']} personas | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Te confirmaremos en ≤10 minutos.")
+                            # Notificar a recepción
+                            await send_message('212668087490', f"🆕 *Nueva reserva pendiente*\n👥 {pedido_estado[user_id]['people']} pax | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Cliente: {user_id}")
+                            pedido_estado.pop(user_id, None)
+                        except:
+                            await send_message(user_id, "❌ Formato no reconocido. Ej: '15/05 21:30' o 'Mañana 20:00'")
+                        continue
+                                        
+                                        else:
+                                            await send_message(user_id, LanguageDetector.get_help(lang))
+                                            
+                        except Exception as e:
+                            logger.error(f"❌ Error process_message: {e}", exc_info=True)
+                    
 # ========== WEBHOOK & ENDPOINTS ==========
 @app.get("/api/whatsapp/webhook")
 async def webhook_verify(request: Request):
