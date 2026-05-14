@@ -1,4 +1,4 @@
-[object Object]#!/usr/bin/env python3
+#!/usr/bin/env python3
 import os, logging, re, json, uuid, httpx
 from datetime import datetime
 from pathlib import Path
