@@ -169,14 +169,30 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
         return "❌ Error al añadir"
 
 async def get_cart(user_id: str, lang: str) -> str:
-    if user_id not in carts or not carts[user_id]: return get_text(lang, 'cart_empty')
+    """Muestra contenido del carrito"""
+    if user_id not in carts or not carts[user_id]:
+        return get_text(lang, 'cart_empty')
+    
     items_dict = {}
     for it in carts[user_id]:
-        if it["name"] not in items_dict: items_dict[it["name"]] = {"price": it["price"], "cantidad": 0}
+        if it["name"] not in items_dict: 
+            items_dict[it["name"]] = {"price": it["price"], "cantidad": 0}
         items_dict[it["name"]]["cantidad"] += 1
+    
     total = sum(it["price"] for it in carts[user_id])
-    lines = [f"• {n} — 🆓 GRATIS (con bebida)" if d["price"]==0 else f"• {n} x{d['cantidad']} — {d['cantidad']*d['price']} MAD" for n,d in items_dict.items()]
-    return f"🛒 *TU PEDIDO*\n{'\n'.join(lines)}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
+    
+    # ✅ FIX: Creamos la lista de texto primero para evitar '\n' dentro de {}
+    lineas = []
+    for n, d in items_dict.items():
+        if d["price"] == 0:
+            lineas.append(f"• {n} — 🆓 GRATIS (con bebida)")
+        elif d["cantidad"] > 1:
+            lineas.append(f"• {n} x{d['cantidad']} — {d['cantidad']*d['price']} MAD")
+        else:
+            lineas.append(f"• {n} — {d['price']} MAD")
+            
+    items_text = "\n".join(lineas)
+    return f"🛒 *TU PEDIDO*\n{items_text}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
 
 async def clear_cart(user_id: str, lang: str) -> str:
     if user_id in carts: carts[user_id] = []
