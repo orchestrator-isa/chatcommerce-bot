@@ -386,7 +386,36 @@ async def process_message(body: dict):
                     await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
                     continue
                 await send_message(user_id, LanguageDetector.get_help(lang))
+        # ... dentro de process_message ...
 
+    # 1. MENÚ (Busca esta línea y agrégale 'm')
+    elif text_lower in ['m', 'menu', 'menú']:
+        menu_txt, _ = await get_restaurant_menu(client_id, lang, waba=True)
+        await send_message(user_id, menu_txt)
+        await send_message(user_id, LanguageDetector.get_help(lang)) # Esto usa el JSON nuevo
+        continue
+
+    # 2. CARRITO (Busca esta línea y agrégale 'v')
+    elif text_lower in ['v', 'pedido', 'order', 'cart', 'carrito']:
+        resp = await get_cart(user_id, lang)
+        await send_message(user_id, resp)
+        continue
+
+    # 3. ELIMINAR (Busca esta línea y cámbiala por startswith('x'))
+    elif text_lower.startswith('x'):
+        # Lógica de eliminar...
+        if user_id in carts: carts[user_id] = [] # Ejemplo simple
+        await send_message(user_id, "🗑️ Carrito vaciado/ítem eliminado") 
+        continue
+
+    # 4. CONFIRMAR (Busca esta línea y agrégale 'c')
+    elif text_lower in ['c', 'confirmar', 'confirm', 'checkout']:
+        if not carts.get(user_id):
+            await send_message(user_id, "⚠️ Carrito vacío.")
+        else:
+            resp = await iniciar_entrega(user_id, lang)
+            await send_message(user_id, resp)
+        continue
 # ========== ENDPOINTS ==========
 @app.get("/api/whatsapp/webhook")
 async def wb_get(req: Request):
@@ -420,6 +449,32 @@ async def startup():
     await load_phone_mapping()
     if supabase: supabase.table("messages").select("id").limit(1).execute()
     logger.info(f"✅ {len(LANGUAGES)} languages: {list(LANGUAGES.keys())}")
+# ===== ENDPOINTS PARA DASHBOARD (agregar en main.py) =====
+@app.get("/api/orders")
+async def get_orders():
+    """Devuelve pedidos recientes para el dashboard"""
+    if not supabase: return {"data": []}
+    try:
+        # Últimos 50 pedidos, ordenados por fecha
+        res = supabase.table("orders").select("*").order("created_at", desc=True).limit(50).execute()
+        return {"data": res.data}
+    except Exception as e:
+        return {"error": str(e), "data": []}
+
+@app.post("/api/restaurant/status")
+async def set_restaurant_status(request: Request):
+    """Cambia estado: normal / moderado / lleno"""
+    global restaurant_status
+    try:
+        data = await request.json()
+        new_status = data.get("status", "normal")
+        if new_status in ["normal", "moderado", "lleno"]:
+            restaurant_status = new_status
+            logger.info(f"🟢 Estado cambiado a: {new_status}")
+            return {"status": "ok", "new_status": new_status}
+        raise HTTPException(400, detail="Estado inválido")
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
