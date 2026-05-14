@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from supabase import create_client, Client
 from typing import Dict, List, Optional
 
-VERSION = "7.3-RESTINGA-OPTIMIZED"
+VERSION = "7.4-MINIMAL-BASE"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("isa-bot")
 
@@ -21,7 +21,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "admin_secret_2026")
 
-# Cliente síncrono (NO usar await con supabase.table())
+# ✅ Cliente SÍNCRONO (NO usar await con supabase.table())
 supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 app = FastAPI(title="Orquestrator ISA", version=VERSION)
@@ -33,15 +33,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 LANG_DIR = Path("lang")
 LANGUAGES: Dict[str, dict] = {}
 if LANG_DIR.exists():
-    for lang_file in LANG_DIR.glob("*.json"):
+    for f in LANG_DIR.glob("*.json"):
         try:
-            with open(lang_file, "r", encoding="utf-8") as f:
-                LANGUAGES[lang_file.stem] = json.load(f)
-            logger.info(f"✅ Idioma cargado: {lang_file.stem}")
-        except Exception as e:
-            logger.error(f"❌ Error {lang_file}: {e}")
-else:
-    LANG_DIR.mkdir(exist_ok=True)
+            with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
+            logger.info(f"✅ Idioma: {f.stem}")
+        except Exception as e: logger.error(f"❌ {f}: {e}")
+else: LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
 
@@ -49,7 +46,6 @@ def get_text(lang_code: str, key: str, **kwargs) -> str:
     file_key = LANG_MAP.get(lang_code, 'es')
     texts = LANGUAGES.get(file_key, LANGUAGES.get('es', {}))
     template = texts.get(key, LANGUAGES['es'].get(key, key))
-    # ✅ FIX: Intenta formatear siempre que haya kwargs, sin verificar '{}'
     if kwargs:
         try: return template.format(**kwargs)
         except: return template
@@ -96,8 +92,8 @@ async def load_phone_mapping():
         phone_to_restaurant['212668087490'] = '44444444-4444-4444-4444-444444444444'
         phone_to_restaurant['5217225529803'] = '44444444-4444-4444-4444-444444444444'
         try:
-            res2 = supabase.table("valid_clients").select("telefono").execute()
-            for r in res2.data: clientes_validados.add(r.get("telefono",""))
+            for r in supabase.table("valid_clients").select("telefono").execute().data:
+                clientes_validados.add(r.get("telefono",""))
         except: pass
         logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
@@ -117,7 +113,7 @@ async def registrar_mensaje(user_id: str, direccion: str, mensaje: str, intent: 
                 supabase.table("messages").insert({"direccion":direccion,"message":mensaje[:500],"intent":intent,"created_at":datetime.now().isoformat()}).execute()
     except Exception as e: logger.error(f"❌ registrar: {e}")
 
-# ========== MENÚ ==========
+# ========== MENÚ & CARRITO ==========
 async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool = True) -> tuple:
     if not supabase: return "❌ Error de conexión", []
     try:
@@ -127,8 +123,8 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
         if not res.data: return "📋 *MENÚ*\nNo hay platos disponibles.", []
         lines = ["📋 *MENÚ RESTINGA*", ""]
         for i, item in enumerate(res.data, 1):
-            price_txt = "🆓 GRATIS con bebida" if item['price']==0 else f"{item['price']} MAD"
-            lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {price_txt}")
+            p = "🆓 GRATIS con bebida" if item['price']==0 else f"{item['price']} MAD"
+            lines.append(f"{i}. 🍽️ *{item['dish_name']}* — {p}")
             if item.get('description'): lines.append(f"   📝 {item['description']}")
             lines.append("")
         return "\n".join(lines), res.data
@@ -136,14 +132,13 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
         logger.error(f"Error menú: {e}")
         return "❌ Error cargando menú", []
 
-# ========== CARRITO ==========
 async def add_to_cart(user_id: str, idx: int, cant: int, client_id: str, lang: str) -> str:
     _, platos = await get_restaurant_menu(client_id, lang, waba=True)
     if not platos or idx > len(platos): return get_text(lang, 'help')
     sel = platos[idx-1]
     if user_id not in carts: carts[user_id] = []
     if sel["price"]==0 and not any(i["price"]>0 for i in carts.get(user_id,[])):
-        return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto. Añade una bebida primero (ej: 18. Té a la menta)"
+        return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto. Añade una bebida primero."
     for _ in range(cant): carts[user_id].append({"name":sel["dish_name"],"price":sel["price"]})
     total = sum(i["price"] for i in carts[user_id])
     return get_text(lang, 'added_to_cart', cantidad=cant, nombre=sel['dish_name'], total=total)
@@ -155,41 +150,17 @@ async def get_cart(user_id: str, lang: str) -> str:
         if i["name"] not in items: items[i["name"]] = {"price":i["price"],"cant":0}
         items[i["name"]]["cant"] += 1
     total = sum(i["price"] for i in carts[user_id])
+    
+    # ✅ FIX: Lista explícita sin f-strings anidados ni comillas escapadas
     lines = []
     for n, d in items.items():
-        if d["price"]==0: lines.append(f"• {n} — 🆓 GRATIS (con bebida)")
-        elif d["cant"]>1: lines.append(f"• {n} x{d['cant']} — {d['cant']*d['price']} MAD")
-        else: lines.append(f"• {n} — {d['price']} MAD")
-    items_text = "\n".join(lines)  # ✅ FIX: fuera del f-string
-    return f"🛒 *TU PEDIDO*\n{items_text}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
-
-async def clear_cart(user_id: str, lang: str) -> str:
-    if user_id in carts: carts[user_id] = []
-    return get_text(lang, 'cart_empty')
-
-# ========== ENVIAR PDF ==========
-async def enviar_menu_pdf(to: str, lang: str) -> bool:
-    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf_map = {'spanish':'menu_es.pdf','english':'menu_en.pdf','french':'menu_fr.pdf','darija_latin':'menu_dar.pdf','darija_arabic':'menu_ar.pdf','es':'menu_es.pdf','en':'menu_en.pdf','fr':'menu_fr.pdf','dar':'menu_dar.pdf','ar':'menu_ar.pdf'}
-    pdf_file = pdf_map.get(lang, 'menu_es.pdf')
-    # ⚠️ Cambia esta URL si tu dominio de Render cambia en producción
-    base_url = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
-    pdf_url = f"{base_url}/static/{pdf_file}"
-    
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":pdf_url,"filename":f"Menu_Restinga_{lang}.pdf","caption":"📋 Menú completo de Restinga Restaurant"}}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.post(url, headers=headers, json=data)
-            if r.status_code == 200:
-                logger.info(f"✅ PDF {pdf_file} enviado a {to}")
-                return True
-            logger.error(f"❌ Error PDF: {r.text[:200]}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Error enviar_menu_pdf: {e}")
-        return False
+        if d["price"] == 0:
+            lines.append(f"• {n} — 🆓 GRATIS (con bebida)")
+        else:
+            lines.append(f"• {n} x{d['cant']} — {d['cant'] * d['price']} MAD")
+            
+    txt = "\n".join(lines)
+    return f"🛒 *TU PEDIDO*\n{txt}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
 
 # ========== ENVIAR WHATSAPP ==========
 async def send_message(to: str, message: str) -> bool:
@@ -251,9 +222,9 @@ async def process_message(body: dict):
                 if tl in ['menu','menú']:
                     mt, _ = await get_restaurant_menu(client_id, lang, waba=True)
                     await send_message(user_id, mt)
-                    await enviar_menu_pdf(user_id, lang)  # ✅ PDF automático
+                    # 📎 Aquí agregaremos PDF después
                     await send_message(user_id, LanguageDetector.get_help(lang))
-                    await registrar_mensaje(user_id, "outgoing", "menu+pdf")
+                    await registrar_mensaje(user_id, "outgoing", "menu")
                     continue
 
                 if tl in ['pedido','order','cart']:
@@ -275,7 +246,8 @@ async def process_message(body: dict):
                     continue
 
                 if re.match(r'(eliminar|quitar)\s+', tl):
-                    await send_message(user_id, await clear_cart(user_id, lang))
+                    if user_id in carts: carts[user_id] = []
+                    await send_message(user_id, get_text(lang, 'cart_empty'))
                     continue
 
                 await send_message(user_id, LanguageDetector.get_help(lang))
