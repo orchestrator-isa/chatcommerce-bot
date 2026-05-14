@@ -136,9 +136,9 @@ async def send_message(to: str, message: str) -> bool:
         logger.error(f"❌ WhatsApp NO configurado: TOKEN={'✅' if WHATSAPP_TOKEN else '❌'}, PHONE_ID={'✅' if PHONE_NUMBER_ID else '❌'}")
         return False
     
-    url = f"https://graph.facebook.com/v18.0/{1097255916805484}/messages"
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
-        "Authorization": f"Bearer {EAAVDr6phSmQBRZACk0uFcEzAlGnR4ZA0zxwPOZAudpdAusUwKOcus97k2cu2tw8YVR26Lm2QnHXENhTasS2rnU81pP0lxRb2ZBaOWZCmU6ZAoSAz3RaYKIJay7e3UW8pMAVzPiPmcxcZBa1KqrZCieOY5NZAUSEcnRYafozevBMWUSDkJgAocCNOeqhjf0TA0gv4TjwZDZD}",
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
     data = {
@@ -176,7 +176,6 @@ async def send_message(to: str, message: str) -> bool:
     except Exception as e:
         logger.error(f"❌ Error send_message: {e}", exc_info=True)
         return False
-
 
 # ========== PROCESAR MENSAJE (con logging de fallback) ==========
 async def process_message(body: dict):
