@@ -223,28 +223,87 @@ async def procesar_direccion(user_id: str, text: str, lang: str) -> str:
     pedido_estado[user_id].update({"direccion": text, "fase": "pago"})
     return f"📍 Dirección guardada.\n{get_text(lang, 'payment_method')}"
 
+async def guardar_pedido(user_id: str, items: list, total: int, tipo_entrega: str, direccion: str, metodo_pago: str, billete: str = None) -> dict:
+    """Guarda pedido en Supabase y retorna número de pedido"""
+    try:
+        if not supabase:
+            return {"error": "Database not connected"}
+        
+        client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
+        
+        # Formatear items para JSON
+        items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
+        
+        data = {
+            "client_id": client_id,
+            "cliente_telefono": user_id,
+            "items_json": items_json,
+            "total_mad": total,
+            "estado": "nuevo",
+            "tipo_entrega": tipo_entrega,
+            "direccion": direccion,
+            "metodo_pago": metodo_pago,
+            "billete": billete,
+            "pagado": metodo_pago != "transferencia",  # Transferencia queda pendiente
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("orders").insert(data).execute()
+        
+        if result.data:
+            pedido = result.data[0]
+            return {"numero": pedido.get("numero", "???"), "id": pedido.get("id")}
+        return {"error": "Failed to create order"}
+        
+    except Exception as e:
+        logger.error(f"❌ Error guardar_pedido: {e}")
+        return {"error": str(e)}
+
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
-    # ✅ 1=Efectivo, 2=Tarjeta, 3=Transferencia (alineado con el prompt)
-    if text == '1':
+    """
+    Maneja selección de método de pago:
+    1 = Efectivo (MAD)
+    2 = Tarjeta (Visa/Mastercard) ✅ 
+    3 = Transferencia (solo validados)
+    """
+    if text == '1':  # ✅ EFECTIVO
         pedido_estado[user_id]["metodo_pago"] = "efectivo"
         pedido_estado[user_id]["fase"] = "cash_bill"
         return get_text(lang, 'cash_bill')
-    elif text == '2':  # ✅ TARJETA (no requiere validación extra)
+    
+    elif text == '2':  # ✅ TARJETA (NO requiere validación)
         pedido_estado[user_id]["metodo_pago"] = "tarjeta"
-        # Guardar pedido directamente
+        
         total = sum(item["price"] for item in carts.get(user_id, []))
         tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
         tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
-        await guardar_pedido(user_id, carts[user_id], total, tipo, pedido_estado[user_id].get("direccion"), "tarjeta")
+        direccion = pedido_estado[user_id].get("direccion")
+        
+        # Guardar pedido directamente
+        resultado = await guardar_pedido(user_id, carts[user_id], total, tipo, direccion, "tarjeta")
+        
+        # Limpieza post-pedido
         carts[user_id] = []
         pedido_estado.pop(user_id, None)
-        return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Tarjeta POS", tiempo=tiempo)
-    elif text == '3':  # ✅ TRANSFERENCIA (sí requiere validación)
+        
+        if "error" in resultado:
+            return f"❌ Error al guardar: {resultado['error']}"
+        
+        numero = resultado.get("numero", "???")
+        return get_text(lang, 'order_confirmed', 
+                       numero=numero, 
+                       total=total, 
+                       metodo="Tarjeta POS", 
+                       tiempo=tiempo)
+    
+    elif text == '3':  # ✅ TRANSFERENCIA (SÍ requiere validación)
         if user_id not in clientes_validados and user_id not in ['212668087490', '212626282904']:
             return "⚠️ *Cliente no validado*\nLos pagos por transferencia son solo para clientes registrados. Por favor, elige efectivo o tarjeta."
+        
         pedido_estado[user_id]["metodo_pago"] = "transferencia"
         pedido_estado[user_id]["fase"] = "transfer_pending"
         return get_text(lang, 'transfer_pending')
+    
     return "❌ Opción no válida. Escribe *1* (Efectivo), *2* (Tarjeta) o *3* (Transferencia)."
 
 async def procesar_billete(user_id: str, text: str, lang: str) -> str:
