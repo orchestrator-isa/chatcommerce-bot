@@ -385,7 +385,36 @@ async def process_message(body: dict):
                     else: resp = await clear_cart(user_id, lang)
                     await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
                     continue
+                # 1. MENÚ (Busca esta línea y agrégale 'm')
+                elif text_lower in ['m', 'menu', 'menú']:
+                    menu_txt, _ = await get_restaurant_menu(client_id, lang, waba=True)
+                    await send_message(user_id, menu_txt)
+                    await send_message(user_id, LanguageDetector.get_help(lang)) # Esto usa el JSON nuevo
+                    continue
+            
+                # 2. CARRITO (Busca esta línea y agrégale 'v')
+                elif text_lower in ['v', 'pedido', 'order', 'cart', 'carrito']:
+                    resp = await get_cart(user_id, lang)
+                    await send_message(user_id, resp)
+                    continue
+            
+                # 3. ELIMINAR (Busca esta línea y cámbiala por startswith('x'))
+                elif text_lower.startswith('x'):
+                    # Lógica de eliminar...
+                    if user_id in carts: carts[user_id] = [] # Ejemplo simple
+                    await send_message(user_id, "🗑️ Carrito vaciado/ítem eliminado") 
+                    continue
+            
+                # 4. CONFIRMAR (Busca esta línea y agrégale 'c')
+                elif text_lower in ['c', 'confirmar', 'confirm', 'checkout']:
+                    if not carts.get(user_id):
+                        await send_message(user_id, "⚠️ Carrito vacío.")
+                    else:
+                        resp = await iniciar_entrega(user_id, lang)
+                        await send_message(user_id, resp)
+                    continue  
                 await send_message(user_id, LanguageDetector.get_help(lang))
+                  
 # ========== ENDPOINTS ==========
 # ========== ENDPOINT RAÍZ (para evitar 404) ==========
 @app.get("/")
