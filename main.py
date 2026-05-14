@@ -477,7 +477,7 @@ async def process_message(body: dict):
                                 except Exception as e:
                                     logger.warning(f"⚠️ Reservas: {e}")
                             # Confirmar al usuario
-                            await send_message(user_id, f"✅ *Solicitud recibida*\n👥 {pedido_estado[user_id]['people']} personas | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Te confirmaremos en ≤10 minutos.")
+                            await send_message(user_id, f"✅ *Solicitud recibida*\n👥 {pedido_estado[user_id]['people']} personas | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Te confirmaremos breve tiempo estimado en 10 minutos si hay disponibilidad.")
                             # Notificar a recepción
                             await send_message('212668087490', f"🆕 *Nueva reserva pendiente*\n👥 {pedido_estado[user_id]['people']} pax | 📅 {fecha} {hora:02d}:{minuto:02d}\n📞 Cliente: {user_id}")
                             pedido_estado.pop(user_id, None)
