@@ -224,14 +224,28 @@ async def procesar_direccion(user_id: str, text: str, lang: str) -> str:
     return f"📍 Dirección guardada.\n{get_text(lang, 'payment_method')}"
 
 async def procesar_pago(user_id: str, text: str, lang: str) -> str:
+    # ✅ 1=Efectivo, 2=Tarjeta, 3=Transferencia (alineado con el prompt)
     if text == '1':
-        pedido_estado[user_id].update({"metodo_pago": "efectivo", "fase": "cash_bill"})
+        pedido_estado[user_id]["metodo_pago"] = "efectivo"
+        pedido_estado[user_id]["fase"] = "cash_bill"
         return get_text(lang, 'cash_bill')
-    elif text == '2':
-        if user_id not in clientes_validados and user_id not in ['212668087490','212626282904']: return get_text(lang, 'transfer_unverified')
-        pedido_estado[user_id].update({"metodo_pago": "transferencia", "fase": "transfer_pending"})
+    elif text == '2':  # ✅ TARJETA (no requiere validación extra)
+        pedido_estado[user_id]["metodo_pago"] = "tarjeta"
+        # Guardar pedido directamente
+        total = sum(item["price"] for item in carts.get(user_id, []))
+        tipo = pedido_estado[user_id].get("tipo_entrega", "recoger")
+        tiempo = TIEMPOS.get(restaurant_status, TIEMPOS["normal"])[tipo]
+        await guardar_pedido(user_id, carts[user_id], total, tipo, pedido_estado[user_id].get("direccion"), "tarjeta")
+        carts[user_id] = []
+        pedido_estado.pop(user_id, None)
+        return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Tarjeta POS", tiempo=tiempo)
+    elif text == '3':  # ✅ TRANSFERENCIA (sí requiere validación)
+        if user_id not in clientes_validados and user_id not in ['212668087490', '212626282904']:
+            return "⚠️ *Cliente no validado*\nLos pagos por transferencia son solo para clientes registrados. Por favor, elige efectivo o tarjeta."
+        pedido_estado[user_id]["metodo_pago"] = "transferencia"
+        pedido_estado[user_id]["fase"] = "transfer_pending"
         return get_text(lang, 'transfer_pending')
-    return "❌ Elige *1* (Efectivo) o *2* (Transferencia)."
+    return "❌ Opción no válida. Escribe *1* (Efectivo), *2* (Tarjeta) o *3* (Transferencia)."
 
 async def procesar_billete(user_id: str, text: str, lang: str) -> str:
     try:
