@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from supabase import create_client, Client
 from typing import Dict, List, Optional
 
-VERSION = "7.3-RESTINGA-PRODUCTION"
+VERSION = "7.3-RESTINGA-FINAL"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("isa-bot")
 
@@ -21,6 +21,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "admin_secret_2026")
 
+# Cliente síncrono (NO usar await con supabase.table())
 supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 app = FastAPI(title="Orquestrator ISA", version=VERSION)
@@ -41,7 +42,6 @@ if LANG_DIR.exists():
         except Exception as e:
             logger.error(f"❌ Error cargando {lang_file}: {e}")
 else:
-    logger.warning("⚠️ Carpeta 'lang' no encontrada")
     LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
@@ -50,12 +50,11 @@ def get_text(lang_code: str, key: str, **kwargs) -> str:
     file_key = LANG_MAP.get(lang_code, 'es')
     texts = LANGUAGES.get(file_key, LANGUAGES.get('es', {}))
     template = texts.get(key, LANGUAGES['es'].get(key, key))
-    
+    # ✅ FIX: Intentar formatear siempre que haya kwargs, sin verificar '{}'
     if kwargs:
         try:
             return template.format(**kwargs)
-        except (KeyError, IndexError):
-            # Si falla el formato, devuelve el template original para no romper el flujo
+        except (KeyError, IndexError, ValueError):
             return template
     return template
 
@@ -81,7 +80,6 @@ class LanguageDetector:
         'darija_latin': ['salam','menu','bghit'],
         'darija_arabic': ['سلام','قائمة','بغيت']
     }
-    
     @classmethod
     def detect(cls, text: str) -> str:
         text_lower = text.lower().strip()
@@ -89,7 +87,6 @@ class LanguageDetector:
         scores = {lang:sum(1 for k in kw if k in text_lower) for lang,kw in cls.KEYWORDS.items()}
         best = max(scores, key=scores.get)
         return best if scores[best]>0 else 'spanish'
-    
     @classmethod
     def get_welcome(cls, lang:str) -> str: return get_text(lang,'welcome')
     @classmethod
@@ -129,7 +126,6 @@ async def registrar_mensaje(user_id: str, direccion: str, mensaje: str, intent: 
             try:
                 supabase.table("sessions").insert({"id":session_id,"user_id":user_id,"inicio":datetime.now().isoformat(),"estado":"activa"}).execute()
             except: pass
-        
         try:
             supabase.table("messages").insert({"session_id":session_id,"direccion":direccion,"message":mensaje[:500],"intent":intent,"created_at":datetime.now().isoformat()}).execute()
         except Exception as e:
@@ -176,29 +172,20 @@ async def add_to_cart(user_id: str, item_index: int, cantidad: int, client_id: s
         return "❌ Error al añadir"
 
 async def get_cart(user_id: str, lang: str) -> str:
-    """Muestra contenido del carrito"""
-    if user_id not in carts or not carts[user_id]:
-        return get_text(lang, 'cart_empty')
-    
+    if user_id not in carts or not carts[user_id]: return get_text(lang, 'cart_empty')
     items_dict = {}
     for it in carts[user_id]:
-        if it["name"] not in items_dict: 
-            items_dict[it["name"]] = {"price": it["price"], "cantidad": 0}
+        if it["name"] not in items_dict: items_dict[it["name"]] = {"price": it["price"], "cantidad": 0}
         items_dict[it["name"]]["cantidad"] += 1
-    
     total = sum(it["price"] for it in carts[user_id])
     
-    # ✅ FIX: Creamos la lista de texto primero para evitar '\n' dentro de {}
-    lineas = []
+    # ✅ FIX: Separar join para evitar SyntaxError en f-string
+    item_lines = []
     for n, d in items_dict.items():
-        if d["price"] == 0:
-            lineas.append(f"• {n} — 🆓 GRATIS (con bebida)")
-        elif d["cantidad"] > 1:
-            lineas.append(f"• {n} x{d['cantidad']} — {d['cantidad']*d['price']} MAD")
-        else:
-            lineas.append(f"• {n} — {d['price']} MAD")
-            
-    items_text = "\n".join(lineas)
+        if d["price"] == 0: item_lines.append(f"• {n} — 🆓 GRATIS (con bebida)")
+        elif d["cantidad"] > 1: item_lines.append(f"• {n} x{d['cantidad']} — {d['cantidad']*d['price']} MAD")
+        else: item_lines.append(f"• {n} — {d['price']} MAD")
+    items_text = "\n".join(item_lines)
     return f"🛒 *TU PEDIDO*\n{items_text}\n💰 *TOTAL: {total} MAD*\nEscribe *CONFIRMAR* para finalizar."
 
 async def clear_cart(user_id: str, lang: str) -> str:
@@ -254,7 +241,6 @@ async def procesar_billete(user_id: str, text: str, lang: str) -> str:
         if billete < total: return f"⚠️ Billete insuficiente. Total: {total} MAD."
         pedido_estado[user_id]["billete"] = str(billete)
         cambio = billete - total
-        # Aquí iría guardar_pedido() en versión completa
         carts[user_id] = []
         pedido_estado.pop(user_id, None)
         return get_text(lang, 'order_confirmed', numero="107", total=total, metodo=f"Efectivo {billete} MAD (cambio: {cambio})", tiempo="5-10 min")
@@ -305,7 +291,6 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "incoming", text)
                     fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
                     
-                    # 🔄 Manejo de fases
                     if fase == "seleccion_idioma":
                         mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
                         if text in mapas:
@@ -325,7 +310,6 @@ async def process_message(body: dict):
                         await registrar_mensaje(user_id, "outgoing", resp)
                         continue
                     
-                    # 📌 Comandos principales
                     if text_lower in ['hola','hello','salam','hi','bonjour','hallo','merhaba','سلام']:
                         carts[user_id] = []
                         if user_id not in user_lang or not user_idioma_manual.get(user_id, False):
