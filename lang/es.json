@@ -1,7 +1,7 @@
 {
-    "welcome": "👋 ¡Hola! Bienvenido a Restinga Restaurant.",
-    "help": "📋 *Comandos Rápidos*\n* *m* - 📜 Ver Menú\n* *v* - 🛒 Ver Carrito\n* *x* - 🗑️ Eliminar (ej: x 1)\n* *c* - ✅ Confirmar",
-    "cart_empty": "🛒 Tu carrito está vacío.",
+    "Bienvenidos": "👋 ¡Hola! Bienvenido a Restinga Restaurant.",
+    "help": "📋 *Comandos Rápidos*\n* *m* - 📜 Ver Menú\n* *v* - 🛒 Ver Carrito\n* *x* - 🗑️ Eliminar (ej: x 1)\n* *c* - ✅ Confirmar\n* *1,2,3...* - Añadir plato (ej: '11' para Couscous de ternera)",
+    "cart_empty": "🛒 Tu carrito está vacío.\n💡 Escribe *M* para ver el Menú y añade platos con su número (ej: '1', '2', '11').",
     "added_to_cart": "✅ *{cantidad} x {nombre}* añadido.\n💰 Subtotal: {total} MAD",
     "removed_item": "🗑️ *{cantidad} x {nombre}* eliminado.\n💰 Nuevo total: {total} MAD",
     "delivery_type": "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio",
@@ -11,6 +11,6 @@
     "cash_bill": "💵 *Pago en efectivo*\n¿Con qué billete pagarás? (Ej: 100, 200)",
     "transfer_unverified": "⚠️ Transferencia solo para clientes validados.",
     "transfer_pending": "⏳ Recibido. Envía el comprobante y confirmaremos en breve.",
-    "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n🔖 Nº: {numero}\n💰 Total: {total} MAD\n⏱️ Tiempo: {tiempo}",
+    "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n🔖 Nº: {numero}\n💰 Total: {total} MAD\n⏱️ Tiempo: {tiempo}\n\n🙏 ¡Gracias por tu compra!\nEscribe *HOLA* para un nuevo pedido."
     "delivery_out_of_zone": "⚠️ Fuera de zona. Solo disponible para Recoger."
 }

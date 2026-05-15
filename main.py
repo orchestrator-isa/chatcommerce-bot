@@ -203,16 +203,41 @@ async def send_message(to: str, message: str) -> bool:
 # ========== GUARDAR PEDIDO ==========
 async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direccion: str, metodo: str, billete: str = None) -> dict:
     try:
-        if not supabase: return {"error": "DB offline", "numero": "TEMP"}
+        if not supabase: 
+            return {"error": "DB offline", "numero": "TEMP-" + uuid.uuid4().hex[:6].upper()}
+        
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
-        data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
+        
+        data = {
+            "client_id": client_id,
+            "cliente_telefono": user_id,
+            "items_json": items_json,
+            "total_mad": total,
+            "estado": "nuevo",
+            "tipo_entrega": tipo,
+            "direccion": direccion,
+            "metodo_pago": metodo,
+            "billete": billete,
+            "pagado": metodo != "transferencia",
+            "created_at": datetime.now().isoformat()
+        }
+        
         res = supabase.table("orders").insert(data).execute()
-        if res.data: return {"numero": res.data[0].get("numero", "???"), "id": res.data[0].get("id")}
-        return {"error": "Failed"}
+        
+        if res.data:
+            pedido = res.data[0]
+            # ✅ Leer correctamente el numero SERIAL de Supabase
+            num = pedido.get("numero")
+            numero_final = str(num) if num is not None else "TEMP-" + uuid.uuid4().hex[:6].upper()
+            return {"numero": numero_final, "id": pedido.get("id")}
+        
+        return {"error": "Failed to create order", "numero": "ERROR"}
+        
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
-        return {"error": str(e)}
+        return {"error": str(e), "numero": "ERROR-" + uuid.uuid4().hex[:6].upper()}
+
 
 # ========== FLUJO PAGO/ENTREGA ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
@@ -397,6 +422,19 @@ async def process_message(body: dict):
                     resp = await get_cart(user_id, lang)
                     await send_message(user_id, resp)
                     continue
+                # 🔢 Números para añadir al carrito
+                elif text_lower.isdigit():
+                    item_index = int(text_lower)
+                    # ✅ Verificar que el índice es válido
+                    _, platos = await get_restaurant_menu(client_id, lang, waba=True)
+                    if not platos or item_index < 1 or item_index > len(platos):
+                        max_plato = len(platos) if platos else 0
+                        await send_message(user_id, f"❌ Número inválido. El menú tiene {max_plato} platos.\n💡 Escribe *m* para ver el menú completo.")
+                    else:
+                        resp = await add_to_cart(user_id, item_index, 1, client_id, lang)
+                        await send_message(user_id, resp)
+                        await registrar_mensaje(user_id, "outgoing", resp)
+                    continue
             
                 # 3. ELIMINAR (Busca esta línea y cámbiala por startswith('x'))
                 elif text_lower.startswith('x'):
@@ -406,15 +444,16 @@ async def process_message(body: dict):
                     continue
             
                 # 4. CONFIRMAR (Busca esta línea y agrégale 'c')
-                elif text_lower in ['c', 'confirmar', 'confirm', 'checkout']:
-                    if not carts.get(user_id):
-                        await send_message(user_id, "⚠️ Carrito vacío.")
+                # ✅ Confirmar pedido
+                elif text_lower in ['c','confirmar','confirm']:
+                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0:
+                        # 💡 Mensaje más útil con guía
+                        await send_message(user_id, "⚠️ Carrito vacío.\n💡 Escribe *m* para ver el menú y añade platos con su número (ej: '1', '2', '11').")
                     else:
                         resp = await iniciar_entrega(user_id, lang)
                         await send_message(user_id, resp)
-                    continue  
-                await send_message(user_id, LanguageDetector.get_help(lang))
-                  
+                        await registrar_mensaje(user_id, "outgoing", resp)
+                    continue
 # ========== ENDPOINTS ==========
 # ========== ENDPOINT RAÍZ (para evitar 404) ==========
 @app.get("/")
