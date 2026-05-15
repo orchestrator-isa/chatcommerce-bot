@@ -301,19 +301,42 @@ async def process_message(body: dict):
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
-                
-                # 🚪 SALIR (global)
+                                # 1️⃣ DEFINIR VARIABLES PRIMERO (CRÍTICO)
+                lang = user_lang.get(user_id, LanguageDetector.detect(txt))
+                await registrar_mensaje(user_id, "incoming", txt)
+                fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
+
+                # 2️⃣ COMANDO GLOBAL SALIR (Funciona en cualquier fase)
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
                     await send_message(user_id, "🔄 *Conversación reiniciada.*\nEscribe *HOLA* o *m* para empezar.")
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
+
+                # 3️⃣ VALIDACIONES RÁPIDAS (Ahora 'fase' YA existe)
+                if len(tl) > 300:
+                    await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
+                    continue
                 
-                lang = user_lang.get(user_id, LanguageDetector.detect(txt))
-                await registrar_mensaje(user_id, "incoming", txt)
-                fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
-                
+                if fase in ["entrega","check_zona","pago","cash_bill"]:
+                    if fase == "entrega" and tl not in ['1','2']:
+                        await send_message(user_id, "❌ Responde *1* (Recoger) o *2* (Domicilio).")
+                        continue
+                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no']:
+                        await send_message(user_id, "❌ Responde *Sí* o *No*.")
+                        continue
+                    if fase == "pago" and tl not in ['1','2','3']:
+                        await send_message(user_id, "❌ Elige *1*, *2* o *3*.")
+                        continue
+                    if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl:
+                        await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
+                        continue
+
+                # 4️⃣ MANEJO DE FASES (Ya no hay duplicados)
+                if fase == "seleccion_idioma":
+
+
                 # FASES
                 if fase == "seleccion_idioma":
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
