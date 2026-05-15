@@ -38,16 +38,19 @@ if LANG_DIR.exists():
             logger.info(f"✅ Idioma: {f.stem}")
         except Exception as e: logger.error(f"❌ {f}: {e}")
 else: LANG_DIR.mkdir(exist_ok=True)
-
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
-
 def get_text(lang_code: str, key: str, **kwargs) -> str:
     file_key = LANG_MAP.get(lang_code, 'es')
-    texts = LANGUAGES.get(file_key, LANGUAGES.get('es', {}))
-    template = texts.get(key, LANGUAGES['es'].get(key, key))
+    # ✅ FIX: Usar .get() para evitar KeyError si 'es' no está cargado
+    es_texts = LANGUAGES.get('es', {})
+    texts = LANGUAGES.get(file_key, es_texts)
+    template = texts.get(key, es_texts.get(key, key))
+    
     if kwargs:
-        try: return template.format(**kwargs)
-        except: return template
+        try:
+            return template.format(**kwargs)
+        except (KeyError, IndexError, ValueError):
+            return template  # Fallback si falla el formato
     return template
 
 # ========== ESTADOS ==========
@@ -314,29 +317,28 @@ async def process_message(body: dict):
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
-                # Fases
+                                # Fases
                 if fase == "seleccion_idioma":
-                    clean_txt = txt.strip()  # ✅ FIX 1: Usar 'txt' (no 'text')
+                    clean_txt = txt.strip()
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
                     if clean_txt in mapas:
                         user_lang[user_id] = mapas[clean_txt]
                         user_idioma_manual[user_id] = True
-                        # ✅ FIX: Usar \n explícito para evitar saltos de línea problemáticos
                         resp = f"{LanguageDetector.get_welcome(user_lang[user_id])}\n{LanguageDetector.get_help(user_lang[user_id])}"
                         await send_message(user_id, resp)
                         await registrar_mensaje(user_id, "outgoing", resp)
                         pedido_estado.pop(user_id, None)
                     else:
                         await send_message(user_id, "❌ Opción no válida. Responde solo con el número: *1*, *2*, *3*, *4* o *5*.")
-                    continue  # ✅ FIX 2: 'continue' separado y al final del bloque
-
-                # ✅ FIX 3: Indentación corregida (debe estar al mismo nivel que el 'if' anterior)
+                    continue  
                 if fase in ["entrega","check_zona","direccion","pago","cash_bill","transfer_pending"]:
                     funcs = {"entrega":procesar_entrega,"check_zona":procesar_zona,"direccion":procesar_direccion,"pago":procesar_pago,"cash_bill":procesar_billete,"transfer_pending":procesar_transferencia}
                     inp = txt if fase=="direccion" else tl
                     resp = await funcs[fase](user_id, inp, lang)
-                    await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
+                    await send_message(user_id, resp)
+                    await registrar_mensaje(user_id, "outgoing", resp)
                     continue
+
 
                 # Comandos
                 if tl in ['hola','hello','salam','hi']:
@@ -380,51 +382,6 @@ async def process_message(body: dict):
                     else: resp = await clear_cart(user_id, lang)
                     await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
                     continue
-                # 1. MENÚ (Busca esta línea y agrégale 'm')
-                elif text_lower in ['m', 'menu', 'menú']:
-                    menu_txt, _ = await get_restaurant_menu(client_id, lang, waba=True)
-                    await send_message(user_id, menu_txt)
-                    await send_message(user_id, LanguageDetector.get_help(lang)) # Esto usa el JSON nuevo
-                    continue
-            
-                # 2. CARRITO (Busca esta línea y agrégale 'v')
-                elif text_lower in ['v', 'pedido', 'order', 'cart', 'carrito']:
-                    resp = await get_cart(user_id, lang)
-                    await send_message(user_id, resp)
-                    continue
-                # 🔢 Números para añadir al carrito
-                elif text_lower.isdigit():
-                    item_index = int(text_lower)
-                    # ✅ Verificar que el índice es válido
-                    _, platos = await get_restaurant_menu(client_id, lang, waba=True)
-                    if not platos or item_index < 1 or item_index > len(platos):
-                        max_plato = len(platos) if platos else 0
-                        await send_message(user_id, f"❌ Número inválido. El menú tiene {max_plato} platos.\n💡 Escribe *m* para ver el menú completo.")
-                    else:
-                        resp = await add_to_cart(user_id, item_index, 1, client_id, lang)
-                        await send_message(user_id, resp)
-                        await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
-            
-                # 3. ELIMINAR (Busca esta línea y cámbiala por startswith('x'))
-                elif text_lower.startswith('x'):
-                    # Lógica de eliminar...
-                    if user_id in carts: carts[user_id] = [] # Ejemplo simple
-                    await send_message(user_id, "🗑️ Carrito vaciado/ítem eliminado") 
-                    continue
-            
-                # 4. CONFIRMAR (Busca esta línea y agrégale 'c')
-                # ✅ Confirmar pedido
-                elif text_lower in ['c','confirmar','confirm']:
-                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0:
-                        # 💡 Mensaje más útil con guía
-                        await send_message(user_id, "⚠️ Carrito vacío.\n💡 Escribe *m* para ver el menú y añade platos con su número (ej: '1', '2', '11').")
-                    else:
-                        resp = await iniciar_entrega(user_id, lang)
-                        await send_message(user_id, resp)
-                        await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
-# ========== ENDPOINTS ==========
 # ========== ENDPOINT RAÍZ (para evitar 404) ==========
 @app.get("/")
 async def root():
@@ -496,4 +453,5 @@ async def set_restaurant_status(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
