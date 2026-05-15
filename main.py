@@ -203,41 +203,20 @@ async def send_message(to: str, message: str) -> bool:
 # ========== GUARDAR PEDIDO ==========
 async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direccion: str, metodo: str, billete: str = None) -> dict:
     try:
-        if not supabase: 
-            return {"error": "DB offline", "numero": "TEMP-" + uuid.uuid4().hex[:6].upper()}
-        
+        if not supabase: return {"error": "DB offline", "numero": "TEMP"}
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
+        data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
         
-        data = {
-            "client_id": client_id,
-            "cliente_telefono": user_id,
-            "items_json": items_json,
-            "total_mad": total,
-            "estado": "nuevo",
-            "tipo_entrega": tipo,
-            "direccion": direccion,
-            "metodo_pago": metodo,
-            "billete": billete,
-            "pagado": metodo != "transferencia",
-            "created_at": datetime.now().isoformat()
-        }
-        
-        res = supabase.table("orders").insert(data).execute()
+        # ✅ FIX: Seleccionar explícitamente 'numero' después del insert
+        res = supabase.table("orders").insert(data).select("numero,id").execute()
         
         if res.data:
-            pedido = res.data[0]
-            # ✅ Leer correctamente el numero SERIAL de Supabase
-            num = pedido.get("numero")
-            numero_final = str(num) if num is not None else "TEMP-" + uuid.uuid4().hex[:6].upper()
-            return {"numero": numero_final, "id": pedido.get("id")}
-        
-        return {"error": "Failed to create order", "numero": "ERROR"}
-        
+            return {"numero": str(res.data[0].get("numero")), "id": res.data[0].get("id")}
+        return {"error": "Failed to create order", "numero": "???"}
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
-        return {"error": str(e), "numero": "ERROR-" + uuid.uuid4().hex[:6].upper()}
-
+        return {"error": str(e), "numero": "???"}
 
 # ========== FLUJO PAGO/ENTREGA ==========
 async def iniciar_entrega(user_id: str, lang: str) -> str:
@@ -325,21 +304,31 @@ async def process_message(body: dict):
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
+                # 🚪 COMANDO GLOBAL: Salir/Reiniciar (funciona en CUALQUIER fase)
+                if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
+                    if user_id in carts: del carts[user_id]
+                    if user_id in pedido_estado: del pedido_estado[user_id]
+                    await send_message(user_id, "🔄 *Conversación reiniciada.*\nEscribe *HOLA* o *m* para empezar.")
+                    await registrar_mensaje(user_id, "outgoing", "reinicio")
+                    continue
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
-
                 # Fases
                 if fase == "seleccion_idioma":
+                    clean_txt = text.strip()  # ← Limpia espacios/retornos
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
-                    if txt in mapas:
-                        user_lang[user_id] = mapas[txt]; user_idioma_manual[user_id] = True
+                    if clean_txt in mapas:
+                        user_lang[user_id] = mapas[clean_txt]
+                        user_idioma_manual[user_id] = True
                         resp = f"{LanguageDetector.get_welcome(user_lang[user_id])}\n{LanguageDetector.get_help(user_lang[user_id])}"
-                        await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
-                        pedido_estado.pop(user_id, None)
-                    else: await send_message(user_id, "❌ Elige 1-5.")
-                    continue
-                if fase in ["entrega","check_zona","direccion","pago","cash_bill","transfer_pending"]:
+                        await send_message(user_id, resp)
+                        await registrar_mensaje(user_id, "outgoing", resp)
+                        pedido_estado.pop(user_id, None)  # ← Limpia la fase
+                        continue
+                    else:
+                        await send_message(user_id, "❌ Opción no válida. Responde solo con el número: *1*, *2*, *3*, *4* o *5*.")
+                        continueif fase in ["entrega","check_zona","direccion","pago","cash_bill","transfer_pending"]:
                     funcs = {"entrega":procesar_entrega,"check_zona":procesar_zona,"direccion":procesar_direccion,"pago":procesar_pago,"cash_bill":procesar_billete,"transfer_pending":procesar_transferencia}
                     inp = txt if fase=="direccion" else tl
                     resp = await funcs[fase](user_id, inp, lang)
