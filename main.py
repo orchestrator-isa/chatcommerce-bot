@@ -362,72 +362,41 @@ async def process_message(body: dict):
                     continue
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
+                
+                # ✅ FIX 1: DEFINIR 'fase' ANTES de usarla
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
-                                # Fases
-                if fase == "seleccion_idioma":
-                    clean_txt = txt.strip()
-                    mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
-                    if clean_txt in mapas:
-                        user_lang[user_id] = mapas[clean_txt]
-                        user_idioma_manual[user_id] = True
-                        resp = f"{LanguageDetector.get_welcome(user_lang[user_id])}\n{LanguageDetector.get_help(user_lang[user_id])}"
-                        await send_message(user_id, resp)
-                        await registrar_mensaje(user_id, "outgoing", resp)
-                        pedido_estado.pop(user_id, None)
-                    else:
-                        await send_message(user_id, "❌ Opción no válida. Responde solo con el número: *1*, *2*, *3*, *4* o *5*.")
-                    continue  
-                if fase in ["entrega","check_zona","direccion","pago","cash_bill","transfer_pending"]:
-                    funcs = {"entrega":procesar_entrega,"check_zona":procesar_zona,"direccion":procesar_direccion,"pago":procesar_pago,"cash_bill":procesar_billete,"transfer_pending":procesar_transferencia}
-                    inp = txt if fase=="direccion" else tl
-                    resp = await funcs[fase](user_id, inp, lang)
-                    await send_message(user_id, resp)
-                    await registrar_mensaje(user_id, "outgoing", resp)
+        
+                # 🛡️ VALIDACIONES RÁPIDAS (ahora sí puede usar 'fase')
+                if len(tl) > 300:
+                    await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* para ver el menú o *q* para reiniciar.")
                     continue
-
-
-                # Comandos
-                if tl in ['hola','hello','salam','hi']:
-                    carts[user_id] = []; pedido_estado.pop(user_id, None)
-                    if user_id not in user_lang or not user_idioma_manual.get(user_id, False):
-                        await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
-                        pedido_estado[user_id] = {"fase":"seleccion_idioma"}
-                    else:
-                        resp = f"{LanguageDetector.get_welcome(lang)}\n{LanguageDetector.get_help(lang)}"
-                        await send_message(user_id, resp)
+        
+                if fase in ["entrega","check_zona","pago","cash_bill"]:
+                    if fase == "entrega" and tl not in ['1','2']:
+                        await send_message(user_id, "❌ Responde *1* (Recoger) o *2* (Domicilio).")
+                        continue
+                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no']:
+                        await send_message(user_id, "❌ Responde *Sí* o *No*.")
+                        continue
+                    if fase == "pago" and tl not in ['1','2','3']:
+                        await send_message(user_id, "❌ Elige *1*, *2* o *3*.")
+                        continue
+                    if fase == "cash_bill":
+                        if not tl.isdigit() and 'eur' not in tl and '€' not in tl:
+                            await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
+                            continue
+        
+                # 🚪 COMANDO GLOBAL: Salir/Reiniciar
+                if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
+                    if user_id in carts: del carts[user_id]
+                    if user_id in pedido_estado: del pedido_estado[user_id]
+                    await send_message(user_id, "🔄 *Conversación reiniciada.*\nEscribe *HOLA* o *m* para empezar.")
+                    await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
-                if tl in ['m','menu','menú']:
-                    mt, _ = await get_restaurant_menu(client_id, lang, waba=True)
-                    await send_message(user_id, mt)
-                    await enviar_menu_pdf(user_id, lang)
-                    await send_message(user_id, LanguageDetector.get_help(lang))
-                    await registrar_mensaje(user_id, "outgoing", "menu")
-                    continue
-                if tl in ['v','pedido','order','cart']:
-                    resp = await get_cart(user_id, lang)
-                    await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
-                if tl in ['c','confirmar','confirm']:
-                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0:
-                        await send_message(user_id, "⚠️ Carrito vacío. Añade productos primero.")
-                    else:
-                        resp = await iniciar_entrega(user_id, lang)
-                        await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
-                if tl in ['reservar','reservación','reservation','book','table']:
-                    pedido_estado[user_id] = {"fase": "reserva_personas"}
-                    await send_message(user_id, "📅 *Reservar mesa*\n¿Para cuántas personas? (1-20)")
-                    continue
-                if tl.isdigit():
-                    resp = await add_to_cart(user_id, int(tl), 1, client_id, lang)
-                    await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
-                if tl.startswith('x'):
-                    resto = tl[1:].strip()
-                    if resto.isdigit(): resp = await remove_from_cart_by_index(user_id, int(resto), lang)
-                    else: resp = await clear_cart(user_id, lang)
-                    await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
-                    continue
+        
+                # ✅ ELIMINA los bloques `elif text_lower in...` que quedaron duplicados al final.
+                # Solo deja los `if tl in [...]` y termina con:
+                await send_message(user_id, LanguageDetector.get_help(lang))    
 # ========== ENDPOINT RAÍZ (para evitar 404) ==========
 @app.get("/")
 async def root():
