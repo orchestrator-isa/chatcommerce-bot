@@ -1,15 +1,16 @@
 {
-  "welcome": "👋 Bonjour! Bienvenue au Restinga Restaurant. Tapez *MENU* pour voir nos plats.",
-  "help": "📋 *Commandes*\n• *MENU* - Voir la carte\n• *NUMÉRO* - Ajouter un plat\n• *QUANTITÉ* - Ex: '3 coca'\n• *COMMANDE* - Voir le panier\n• *SUPPRIMER X* - Retirer un plat\n• *CONFIRMER* - Finaliser",
-  "cart_empty": "🛒 *Panier vide*\n\nTapez *MENU* pour voir nos plats.",
+  "welcome": "👋 Bonjour ! Bienvenue chez Restinga Restaurant.",
+  "help": "📋 *Commandes Rapides*\n* *m* - 📜 Menu\n* *v* - 🛒 Panier\n* *x* - 🗑️ Supprimer (ex: x 1)\n* *c* - ✅ Valider\n* *1,2,3...* - Ajouter (ex: '11' Couscous)",
+  "cart_empty": "🛒 Votre panier est vide.\n💡 Tapez *m* pour voir le menu.",
   "added_to_cart": "✅ *{cantidad} x {nombre}* ajouté.\n💰 Sous-total: {total} MAD",
-  "removed_item": "✅ *{cantidad} x {nombre}* retiré.\n💰 Nouveau total: {total} MAD",
-  "delivery_type": "🚚 *Type de livraison*\n\n• *1* - À emporter\n• *2* - Livraison à domicile (rayon 100m)\n\nChoisissez une option:",
-  "payment_method": "💳 *Mode de paiement*\n\n• *1* - Espèces\n• *2* - Virement bancaire\n\nChoisissez une option:",
-  "cash_bill": "💰 *Paiement en espèces*\n\nAvec quel billet allez-vous payer? (Ex: 50, 100, 200 MAD)",
-  "cash_no_change": "⚠️ *Désolé*\nNous n'avons pas de monnaie pour {bill} MAD. Pouvez-vous payer avec un billet plus petit ou par carte?",
-  "order_confirmed": "✅ *COMMANDE CONFIRMÉE!*\n\n📋 *N° de commande: {numero}*\n💰 Total: {total} MAD\n💳 Paiement: {metodo}\n⏱️ Délai: {tiempo}\n\n🙏 Merci pour votre achat!\n\nTapez *BONJOUR* pour une nouvelle commande.",
-  "address_request": "📍 *Adresse de livraison*\n\nVeuillez écrire votre adresse complète:",
-  "delivery_zone_check": "📍 *Vérification de zone*\n\nÊtes-vous dans un rayon de 100m du restaurant (2-3 rues)?\n\nRépondez *OUI* ou *NON*:",
-  "delivery_out_of_zone": "📦 *Hors zone*\n\nNous livrons uniquement dans un rayon de 100m. Vous pouvez venir chercher sur place."
+  "removed_item": "🗑️ *{cantidad} x {nombre}* supprimé.\n💰 Nouveau total: {total} MAD",
+  "delivery_type": "🚚 *Type de livraison*\n1. Sur place\n2. À domicile",
+  "delivery_zone_check": "📍 Êtes-vous dans notre zone (5km) ?\nRépondez: Oui / Non",
+  "address_request": "📍 Écrivez votre adresse exacte:",
+  "payment_method": "💳 *Moyen de paiement*\n1. Espèces (MAD/EUR)\n2. Carte (Visa/Mastercard)\n3. Virement",
+  "cash_bill": "💵 *Paiement espèces*\nAvec quel billet ? (Ex: 100, 200)",
+  "transfer_unverified": "⚠️ Virement uniquement pour clients vérifiés.",
+  "transfer_pending": "⏳ Reçu. Envoyez le justificatif.",
+  "order_confirmed": "*✅ COMMANDE CONFIRMÉE !*\n🔖 N°: {numero}\n💰 Total: {total} MAD\n⏱️ Délai: {tiempo}\n\n🙏 Merci !\nTapez *BONJOUR* pour commander.",
+  "delivery_out_of_zone": "⚠️ Hors zone. Retrait uniquement."
 }

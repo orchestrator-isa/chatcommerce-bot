@@ -1,12 +1,16 @@
 {
-  "welcome": "👋 Salam! Marhba bik f Restinga Restaurant. Kteb *MENU* bach tchouf lmaakoulat.",
-  "help": "📋 *Awamir*\n• *MENU* - Chouf lmaakoul\n• *RAQM* - Zid flakla\n• *KAMYA* - Matalan '3 coca'\n• *TALAB* - Chouf talab\n• *HEDI X* - Hedi flakla\n• *CONFIRM* - Kmml talab",
-  "cart_empty": "🛒 *Talab khawi*\n\nKteb *MENU* bach tchouf lmaakoulat.",
-  "added_to_cart": "✅ *{cantidad} x {nombre}* tzad.\n💰 Total dlaba: {total} MAD",
-  "removed_item": "✅ *{cantidad} x {nombre}* tehhed.\n💰 Total jdid: {total} MAD",
-  "delivery_type": "🚚 *Nou3 d l'livraison*\n\n• *1* - Hder f l'local\n• *2* - Livraison l'dar (100m)\n\nKteb raqm dialek:",
-  "payment_method": "💳 *Kifash ndf3o?*\n\n• *1* - Liquide\n• *2* - Transfert bancaire\n\nKteb raqm dialek:",
-  "cash_bill": "💰 *Paiement liquide*\n\nAch men flous ghadi tdf3? (Matalan: 50, 100, 200 MAD)",
-  "order_confirmed": "✅ *TALAB MKEDED!*\n\n📋 *Ra9m l'talab: {numero}*\n💰 Total: {total} MAD\n💳 Tara2a: {metodo}\n⏱️ Wa9t: {tiempo}\n\n🙏 Chokran bzaf!\n\nKteb *SALAM* bach tdir talab jdid.",
-  "address_request": "📍 *Adresse l'livraison*\n\nAqh kteb adresse kamla dyalk:"
+  "welcome": "👋 Salam! Merhba bik f Restinga Restaurant.",
+  "help": "📋 *Awamer*\n* *m* - 📜 Menu\n* *v* - 🛒 Panier\n* *x* - 🗑️ Hdef (ex: x 1)\n* *c* - ✅ Confirm\n* *1,2,3...* - Zid (ex: '11' Couscous)",
+  "cart_empty": "🛒 Panier fad. \n💡 Ketbi *m* bach tchouf menu.",
+  "added_to_cart": "✅ *{cantidad} x {nombre}* tzad.\n💰 Total: {total} MAD",
+  "removed_item": "🗑️ *{cantidad} x {nombre}* thdaf.\n💰 Total jdid: {total} MAD",
+  "delivery_type": "🚚 *Kifash ghadi takhod*\n1. F l'local\n2. Domicile",
+  "delivery_zone_check": "📍 Wash kayn f zone dyalna (5km)?\nJwob: Ah / La",
+  "address_request": "📍 Ketbi 3onwan dyalk b dda9t:",
+  "payment_method": "💳 *Tari9t l'khalas*\n1. Cash (MAD/EUR)\n2. Carte\n3. Virement",
+  "cash_bill": "💵 *Cash*\nBch l'wra9a ghadi tkhles? (Ex: 100, 200)",
+  "transfer_unverified": "⚠️ Virement ghir l'clients vérifiés.",
+  "transfer_pending": "⏳ Wslna. Sir l'justificatif.",
+  "order_confirmed": "*✅ Commande Confirmée!*\n🔖 N°: {numero}\n💰 Total: {total} MAD\n⏱️ W9t: {tiempo}\n\n🙏 Shokran!\nKetbi *SALAM* bach tcommandi.",
+  "delivery_out_of_zone": "⚠️ Kharej mn zone. Ghir f l'local."
 }

@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
 import os, logging, re, json, uuid, httpx
+{
+    "Bienvenidos": "👋 ¡Hola! Bienvenido a Restinga Restaurant.",
+    "help": "📋 *Comandos Rápidos*\n* *m* - 📜 Ver Menú\n* *v* - 🛒 Ver Carrito\n* *x* - 🗑️ Eliminar (ej: x 1)\n* *c* - ✅ Confirmar\n* *1,2,3...* - Añadir plato (ej: '11' para Couscous de ternera)",
+    "cart_empty": "🛒 Tu carrito está vacío.\n💡 Escribe *M* para ver el Menú y añade platos con su número (ej: '1', '2', '11').",
+    "added_to_cart": "✅ *{cantidad} x {nombre}* añadido.\n💰 Subtotal: {total} MAD",
+    "removed_item": "🗑️ *{cantidad} x {nombre}* eliminado.\n💰 Nuevo total: {total} MAD",
+    "delivery_type": "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio",
+    "delivery_zone_check": "📍 ¿Estás dentro de nuestra zona de reparto (Radio 5km)?\nResponde: Sí / No",
+    "address_request": "📍 Escribe tu dirección exacta:",
+    "payment_method": "💳 *Método de pago*\n1. Efectivo (MAD/EUR)\n2. Tarjeta (Visa/Mastercard)\n3. Transferencia",
+    "cash_bill": "💵 *Pago en efectivo*\n¿Con qué billete pagarás? (Ej: 100, 200)",
+    "transfer_unverified": "⚠️ Transferencia solo para clientes validados.",
+    "transfer_pending": "⏳ Recibido. Envía el comprobante y confirmaremos en breve.",
+    "order_confirmed": "✅ *¡PEDIDO CONFIRMADO!*\n🔖 Nº: {numero}\n💰 Total: {total} MAD\n⏱️ Tiempo: {tiempo}\n\n🙏 ¡Gracias por tu compra!\nEscribe *HOLA* para un nuevo pedido."
+    "delivery_out_of_zone": "⚠️ Fuera de zona. Solo disponible para Recoger."
+}
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
@@ -31,26 +47,40 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # ========== IDIOMAS ==========
 LANG_DIR = Path("lang")
 LANGUAGES: Dict[str, dict] = {}
+
 if LANG_DIR.exists():
     for f in LANG_DIR.glob("*.json"):
         try:
-            with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
-            logger.info(f"✅ Idioma: {f.stem}")
-        except Exception as e: logger.error(f"❌ {f}: {e}")
-else: LANG_DIR.mkdir(exist_ok=True)
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                LANGUAGES[f.stem] = data
+                logger.info(f"✅ Idioma cargado: {f.stem} ({len(data)} claves)")
+                # Debug: mostrar primeras claves
+                if f.stem == 'es':
+                    logger.debug(f"🔍 es.json keys: {list(data.keys())[:5]}...")
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON inválido en {f}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error cargando {f}: {e}")
+else:
+    logger.warning("⚠️ Carpeta 'lang' no encontrada, creando...")
+    LANG_DIR.mkdir(exist_ok=True, parents=True)
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
 def get_text(lang_code: str, key: str, **kwargs) -> str:
+    """Obtiene texto traducido con fallback seguro"""
     file_key = LANG_MAP.get(lang_code, 'es')
-    # ✅ FIX: Usar .get() para evitar KeyError si 'es' no está cargado
+    # ✅ Fallback seguro: si 'es' no existe, usa dict vacío
     es_texts = LANGUAGES.get('es', {})
     texts = LANGUAGES.get(file_key, es_texts)
-    template = texts.get(key, es_texts.get(key, key))
-    
-    if kwargs:
+    # ✅ Busca template con fallback en cascada
+    template = texts.get(key) or es_texts.get(key) or key
+    # ✅ Formatea solo si hay kwargs y template válido
+    if kwargs and template and template != key:
         try:
             return template.format(**kwargs)
-        except (KeyError, IndexError, ValueError):
-            return template  # Fallback si falla el formato
+        except (KeyError, IndexError, ValueError, TypeError):
+            # Si falla el formato, devuelve el template sin formatear
+            return template
     return template
 
 # ========== ESTADOS ==========
@@ -133,15 +163,26 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
     except Exception as e:
         logger.error(f"Error menú: {e}")
         return "❌ Error cargando menú", []
-
 async def add_to_cart(user_id: str, idx: int, cant: int, client_id: str, lang: str) -> str:
+    """Añade producto al carrito con validación de índice"""
     _, platos = await get_restaurant_menu(client_id, lang, waba=True)
-    if not platos or idx > len(platos): return get_text(lang, 'help')
-    sel = platos[idx-1]
-    if user_id not in carts: carts[user_id] = []
-    if sel["price"]==0 and not any(i["price"]>0 for i in carts.get(user_id,[])):
+    
+    # ✅ Validar que el índice sea válido
+    if not platos or idx < 1 or idx > len(platos):
+        max_idx = len(platos) if platos else 0
+        return f"❌ Número inválido. El menú tiene {max_idx} platos (1-{max_idx}).\n💡 Escribe *m* para ver el menú."
+    
+    sel = platos[idx - 1]  # idx es 1-based, lista es 0-based
+    if user_id not in carts:
+        carts[user_id] = []
+    
+    # Validar producto gratis
+    if sel["price"] == 0 and not any(i["price"] > 0 for i in carts.get(user_id, [])):
         return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto. Añade una bebida primero."
-    for _ in range(cant): carts[user_id].append({"name":sel["dish_name"],"price":sel["price"]})
+    
+    for _ in range(cant):
+        carts[user_id].append({"name": sel["dish_name"], "price": sel["price"]})
+    
     total = sum(i["price"] for i in carts[user_id])
     return get_text(lang, 'added_to_cart', cantidad=cant, nombre=sel['dish_name'], total=total)
 
@@ -308,6 +349,27 @@ async def process_message(body: dict):
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
                 # 🚪 COMANDO GLOBAL: Salir/Reiniciar (funciona en CUALQUIER fase)
+                # 🛡️ VALIDACIONES RÁPIDAS
+                if not tl: continue  # Ignorar mensajes vacíos
+                if len(tl) > 300:
+                    await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* para ver el menú o *q* para reiniciar.")
+                    continue
+                
+                # Validar que si está en una fase, solo acepte entradas válidas para esa fase
+                if fase in ["entrega","check_zona","pago","cash_bill"]:
+                    if fase == "entrega" and tl not in ['1','2']:
+                        await send_message(user_id, "❌ Responde *1* (Recoger) o *2* (Domicilio).")
+                        continue
+                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no']:
+                        await send_message(user_id, "❌ Responde *Sí* o *No*.")
+                        continue
+                    if fase == "pago" and tl not in ['1','2','3']:
+                        await send_message(user_id, "❌ Elige *1*, *2* o *3*.")
+                        continue
+                    if fase == "cash_bill":
+                        if not tl.isdigit() and 'eur' not in tl and '€' not in tl:
+                            await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
+                            continue 
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]

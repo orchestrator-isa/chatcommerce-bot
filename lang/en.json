@@ -1,15 +1,16 @@
 {
-  "welcome": "👋 Hello! Welcome to Restinga Restaurant. Type *MENU* to see our dishes.",
-  "help": "📋 *Commands*\n• *MENU* - View menu\n• *NUMBER* - Add dish\n• *QUANTITY* - E.g., '3 coke'\n• *ORDER* - View cart\n• *REMOVE X* - Remove dish\n• *CONFIRM* - Checkout",
-  "cart_empty": "🛒 *Empty cart*\n\nType *MENU* to see our dishes.",
+  "welcome": "👋 Hello! Welcome to Restinga Restaurant.",
+  "help": "📋 *Quick Commands*\n* *m* - 📜 Menu\n* *v* - 🛒 Cart\n* *x* - 🗑️ Remove (ex: x 1)\n* *c* - ✅ Confirm\n* *1,2,3...* - Add dish (ex: '11' for Couscous)",
+  "cart_empty": "🛒 Your cart is empty.\n💡 Type *m* to see the menu and add dishes by number.",
   "added_to_cart": "✅ *{cantidad} x {nombre}* added.\n💰 Subtotal: {total} MAD",
-  "removed_item": "✅ *{cantidad} x {nombre}* removed.\n💰 New total: {total} MAD",
-  "delivery_type": "🚚 *Delivery type*\n\n• *1* - Pickup\n• *2* - Home delivery (100m radius)\n\nChoose an option:",
-  "payment_method": "💳 *Payment method*\n\n• *1* - Cash\n• *2* - Bank transfer\n\nChoose an option:",
-  "cash_bill": "💰 *Cash payment*\n\nWhat bill will you pay with? (E.g., 50, 100, 200 MAD)",
-  "cash_no_change": "⚠️ *Sorry*\nWe don't have change for {bill} MAD. Can you pay with a smaller bill or card?",
-  "order_confirmed": "✅ *ORDER CONFIRMED!*\n\n📋 *Order #: {numero}*\n💰 Total: {total} MAD\n💳 Method: {metodo}\n⏱️ Time: {tiempo}\n\n🙏 Thank you for your purchase!\n\nType *HELLO* for a new order.",
-  "address_request": "📍 *Delivery address*\n\nPlease write your full address:",
-  "delivery_zone_check": "📍 *Zone check*\n\nAre you within a 100m radius of the restaurant (2-3 blocks)?\n\nAnswer *YES* or *NO*:",
-  "delivery_out_of_zone": "📦 *Out of zone*\n\nWe only deliver within a 100m radius. You can pick up locally."
+  "removed_item": "🗑️ *{cantidad} x {nombre}* removed.\n💰 New total: {total} MAD",
+  "delivery_type": "🚚 *Delivery Type*\n1. Pickup\n2. Delivery",
+  "delivery_zone_check": "📍 Are you within our 5km delivery radius?\nReply: Yes / No",
+  "address_request": "📍 Please write your exact address:",
+  "payment_method": "💳 *Payment Method*\n1. Cash (MAD/EUR)\n2. Card (Visa/Mastercard)\n3. Bank Transfer",
+  "cash_bill": "💵 *Cash Payment*\nWhich bill will you use? (Ex: 100, 200)",
+  "transfer_unverified": "⚠️ Transfer only for verified clients.",
+  "transfer_pending": "⏳ Received. Send proof and we'll confirm shortly.",
+  "order_confirmed": "*✅ ORDER CONFIRMED!*\n🔖 No: {numero}\n💰 Total: {total} MAD\n⏱️ Time: {tiempo}\n\n🙏 Thank you!\nType *HELLO* for a new order.",
+  "delivery_out_of_zone": "⚠️ Out of zone. Pickup only."
 }

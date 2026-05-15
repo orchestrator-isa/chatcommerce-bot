@@ -3,37 +3,83 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Restinga</title>
+    <title>Dashboard - Restinga Dispatcher</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; background: #eee; }
-        .header { display: flex; justify-content: space-between; background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .card { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .status-btn { padding: 8px 15px; border: none; color: white; cursor: pointer; border-radius: 4px; opacity: 0.5; }
-        .active { opacity: 1; font-weight: bold; transform: scale(1.05); }
-        .n { background: #27ae60; } .m { background: #f1c40f; } .l { background: #e74c3c; }
+        :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--green:#10b981;--yellow:#f59e0b;--red:#ef4444;--blue:#3b82f6}
+        body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px}
+        header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+        .status-bar{display:flex;gap:10px}
+        .btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+        .btn-n{background:var(--green);color:#fff}
+        .btn-m{background:var(--yellow);color:#000}
+        .btn-l{background:var(--red);color:#fff}
+        .btn.active{box-shadow:0 0 0 3px #fff}
+        table{width:100%;border-collapse:collapse;background:var(--card);border-radius:8px;overflow:hidden}
+        th,td{padding:12px;text-align:left;border-bottom:1px solid #334155}
+        th{background:#0f172a}
+        .badge{padding:4px 8px;border-radius:4px;font-size:0.8em}
+        .b-nuevo{background:var(--blue)} .b-cocina{background:var(--yellow)} .b-listo{background:var(--green)}
+        #login{position:fixed;inset:0;background:#00000080;display:flex;align-items:center;justify-content:center}
+        .box{background:var(--card);padding:30px;border-radius:12px;text-align:center}
+        input{padding:10px;border-radius:6px;border:none;width:200px;margin:10px 0}
+        .refresh{position:fixed;bottom:20px;right:20px;background:var(--blue);color:#fff;padding:10px;border-radius:50%;cursor:pointer}
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>📋 Restinga - Dashboard</h2>
-        <div>
-            Estado: 
-            <button class="status-btn n" onclick="setStatus('normal')">🟢</button>
-            <button class="status-btn m" onclick="setStatus('moderado')">🟡</button>
-            <button class="status-btn l" onclick="setStatus('lleno')">🔴</button>
+    <div id="login">
+        <div class="box">
+            <h2>🔐 Acceso Dispatcher</h2>
+            <input type="password" id="pass" placeholder="Contraseña">
+            <br><button class="btn btn-n" onclick="auth()">Entrar</button>
         </div>
     </div>
-    
-    <div class="card">
-        <h3>📦 Pedidos Recientes</h3>
-        <p>Cargando datos...</p>
+
+    <div id="app" style="display:none">
+        <header>
+            <h2>📋 Restinga - Dispatcher</h2>
+            <div class="status-bar">
+                <span>Estado:</span>
+                <button class="btn btn-n" onclick="setStatus('normal')">🟢 Normal</button>
+                <button class="btn btn-m" onclick="setStatus('moderado')">🟡 Moderado</button>
+                <button class="btn btn-l" onclick="setStatus('lleno')">🔴 Lleno</button>
+            </div>
+        </header>
+        <table>
+            <thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Tipo</th><th>Pago</th><th>Estado</th><th>Hora</th></tr></thead>
+            <tbody id="orders"></tbody>
+        </table>
     </div>
+    <div class="refresh" onclick="loadData()">🔄</div>
 
     <script>
-        // Función simple para simular cambio de estado
-        async function setStatus(s) {
-            alert("Cambiando estado a: " + s + " (Requiere configurar endpoints en main.py)");
-            // Aquí iría el fetch a tu API
+        let PASS = prompt("🔐 Contraseña Dispatcher:") || '';
+        if(PASS !== 'restinga2026') location.reload();
+        document.getElementById('login').style.display='none';
+        document.getElementById('app').style.display='block';
+        loadData(); setInterval(loadData, 15000);
+
+        async function loadData(){
+            try{
+                const r = await fetch('/api/orders').then(r=>r.json());
+                const tb = document.getElementById('orders');
+                tb.innerHTML = (r.data||[]).map(o=>`
+                    <tr>
+                        <td>#${o.numero||o.id.slice(0,6)}</td>
+                        <td>${o.cliente_telefono?.slice(-4)||'---'}</td>
+                        <td>${o.total_mad} MAD</td>
+                        <td>${o.tipo_entrega||'recoger'}</td>
+                        <td>${o.metodo_pago||'---'}</td>
+                        <td><span class="badge b-${o.estado}">${o.estado}</span></td>
+                        <td>${new Date(o.created_at).toLocaleTimeString()}</td>
+                    </tr>`).join('');
+            }catch(e){tb.innerHTML='<tr><td colspan="7">⚠️ Error cargando pedidos</td></tr>';}
+        }
+        async function setStatus(s){
+            try{
+                await fetch('/api/restaurant/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})});
+                document.querySelectorAll('.status-bar .btn').forEach(b=>b.classList.remove('active'));
+                document.querySelector(`.btn-${s[0]}`).classList.add('active');
+            }catch(e){alert('Error cambiando estado');}
         }
     </script>
 </body>
