@@ -288,7 +288,6 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
 # ========== PROCESAR MENSAJE ==========
-# ========== PROCESAR MENSAJE ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -302,13 +301,13 @@ async def process_message(body: dict):
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
-
-                # 1️⃣ DEFINIR VARIABLES PRIMERO (CRÍTICO)
+                
+                # ✅ 1. DEFINIR VARIABLES PRIMERO (CRÍTICO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ COMANDO GLOBAL SALIR (Funciona en cualquier fase)
+                # 🚪 2. COMANDO GLOBAL SALIR
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
@@ -316,7 +315,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES RÁPIDAS (Ahora 'fase' YA existe)
+                # 🛡️ 3. VALIDACIONES RÁPIDAS (Aquí 'fase' YA existe)
                 if len(tl) > 300:
                     await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
                     continue
@@ -334,7 +333,6 @@ async def process_message(body: dict):
                     if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl:
                         await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
                         continue
-
                 # 4️⃣ MANEJO DE FASES
                 if fase == "seleccion_idioma":
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
@@ -430,9 +428,6 @@ async def process_message(body: dict):
                 
                 # Fallback final
                 await send_message(user_id, LanguageDetector.get_help(lang))
-
-
-# ========== ENDPOINTS ==========
 @app.get("/")
 async def root(): return {"status":"ok","version":VERSION,"service":"Orquestrator ISA"}
 @app.get("/health")
