@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from supabase import create_client, Client
 from typing import Dict, List, Optional
 
-VERSION = "7.8-RESTINGA-PROD"
+VERSION = "8.0-RESTINGA-PROD"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("isa-bot")
 
@@ -95,7 +95,6 @@ async def load_phone_mapping():
             for r in supabase.table("valid_clients").select("telefono").execute().data:
                 clientes_validados.add(r.get("telefono",""))
         except: pass
-        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
 
 # ========== REGISTRAR MENSAJE ==========
@@ -130,19 +129,24 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
             lines.append(f"{i}. *{nombre}* — {p}")
             if item.get("description"): lines.append(f"   {item['description']}")
             lines.append("")
-        return "\n".join(lines), res.data
+        txt = "\n".join(lines)
+        # WhatsApp corta ~1600 chars. Dividimos si es necesario:
+        if len(txt) > 1500:
+            mid = len(txt) // 2
+            return txt[:mid], res.data, txt[mid:]
+        return txt, res.data, ""
     except Exception as e:
         logger.error(f"Error menú: {e}")
-        return "❌ Error cargando menú", []
+        return "❌ Error cargando menú", [], ""
 
 async def add_to_cart(user_id: str, idx: int, cant: int, client_id: str, lang: str) -> str:
-    _, platos = await get_restaurant_menu(client_id, lang, waba=True)
+    _, platos, _ = await get_restaurant_menu(client_id, lang, waba=True)
     if not platos or idx < 1 or idx > len(platos):
         return f"❌ Número inválido. El menú tiene {len(platos)} platos."
     sel = platos[idx-1]
     if user_id not in carts: carts[user_id] = []
     if sel["price"]==0 and not any(i["price"]>0 for i in carts.get(user_id,[])):
-        return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto. Añade una bebida primero."
+        return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto."
     for _ in range(cant): carts[user_id].append({"name":sel["dish_name"],"price":sel["price"]})
     total = sum(i["price"] for i in carts[user_id])
     return get_text(lang, 'added_to_cart', cantidad=cant, nombre=sel['dish_name'], total=total)
@@ -174,7 +178,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf'
+    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -206,6 +210,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
+        # ✅ FIX: Sin .select() (incompatible con versión actual)
         res = supabase.table("orders").insert(data).execute()
         if res.data:
             num = res.data[0].get("numero")
@@ -232,9 +237,14 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
     return "❌ Elige *1* (Recoger) o *2* (Domicilio)."
 
 async def procesar_zona(user_id: str, text: str, lang: str) -> str:
-    if text.lower() in ['si','sí','yes','oui','no']:
-        pedido_estado[user_id]["fase"] = "pago" if text.lower()=='no' else "direccion"
-        return get_text(lang, 'delivery_out_of_zone') if text.lower()=='no' else "📍 Escribe tu dirección exacta:"
+    tl = text.lower().strip()
+    if tl in ['no', 'n', 'nah']:
+        pedido_estado[user_id].update({"tipo_entrega": "recoger", "fase": "pago"})
+        total = sum(i["price"] for i in carts.get(user_id, []))
+        return f"⚠️ *Fuera de zona*. Cambiado a recoger.\n⏱️ 5-10 min\n💰 {total} MAD\n{get_text(lang, 'payment_method')}"
+    if tl in ['si','sí','yes','oui']:
+        pedido_estado[user_id]["fase"] = "direccion"
+        return "📍 Escribe tu dirección exacta:"
     return "❌ Responde *Sí* o *No*."
 
 async def procesar_direccion(user_id: str, text: str, lang: str) -> str:
@@ -284,7 +294,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     carts[user_id] = []; pedido_estado.pop(user_id, None)
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
-# ========== PROCESAR MENSAJE (ORDEN CORRECTO) ==========
+# ========== PROCESAR MENSAJE (ESTRUCTURA CORRECTA v8.0) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -299,30 +309,32 @@ async def process_message(body: dict):
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
                 
-                # 1️⃣ VARIABLES CRÍTICAS (DEFINIDAS PRIMERO)
+                # 1️⃣ DEFINIR VARIABLES PRIMERO (CRÍTICO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ COMANDO Q / SALIR (REINICIA A IDIOMAS)
+                # 2️⃣ COMANDO Q / SALIR (Reinicia a idiomas)
                 if tl in ['q', 'salir', 'exit', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
                     pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                     await send_message(user_id, "🌍 *Selecciona tu idioma:*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
+                    await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES
-                if len(tl) > 300:
-                    await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
-                    continue
+                # 3️⃣ VALIDACIONES DE FASE
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
-                    if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
-                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
-                    if fase == "pago" and tl not in ['1','2','3']: await send_message(user_id, "❌ Elige *1*, *2* o *3*."); continue
-                    if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl: await send_message(user_id, "❌ Ej: `100` o `20EUR`."); continue
+                    if fase == "entrega" and tl not in ['1','2']:
+                        await send_message(user_id, "❌ Responde *1* (Recoger) o *2* (Domicilio)."); continue
+                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']:
+                        await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
+                    if fase == "pago" and tl not in ['1','2','3']:
+                        await send_message(user_id, "❌ Elige *1*, *2* o *3*."); continue
+                    if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl:
+                        await send_message(user_id, "❌ Ej: `100` o `20EUR`."); continue
 
-                # 4️⃣ MANEJO DE FASES
+                # 4️⃣ FASES
                 if fase == "seleccion_idioma":
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
                     if txt in mapas:
@@ -354,16 +366,16 @@ async def process_message(body: dict):
                     except: await send_message(user_id, "❌ Formato no reconocido.")
                     continue
 
-                # 5️⃣ COMANDOS PRINCIPALES
+                # 5️⃣ COMANDOS (Solo 'if', CERO duplicados)
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
                     await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
                     pedido_estado[user_id] = {"fase":"seleccion_idioma"}
                     continue
                 if tl in ['m','menu','menú']:
-                    mt, platos = await get_restaurant_menu(client_id, lang, waba=True)
-                    await send_message(user_id, mt)
-                    if len(mt) > 1500: await send_message(user_id, "(Continúa en PDF adjunto)")
+                    msg1, platos, msg2 = await get_restaurant_menu(client_id, lang, waba=True)
+                    await send_message(user_id, msg1)
+                    if msg2: await send_message(user_id, msg2)
                     await enviar_menu_pdf(user_id, lang)
                     await send_message(user_id, LanguageDetector.get_help(lang))
                     continue
