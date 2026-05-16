@@ -1,27 +1,38 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard Restinga - Analytics</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--acc:#3b82f6;--succ:#10b981;--warn:#f59e0b;--danger:#ef4444}
     body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px}
-    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-    .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
-    .kpi{background:var(--card);padding:15px;border-radius:10px;text-align:center}
-    .kpi h3{margin:0 0 5px;font-size:.9em;opacity:.8}
-    .kpi .val{font-size:1.8em;font-weight:bold}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+    .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;margin-bottom:20px}
+    .kpi{background:var(--card);padding:15px;border-radius:10px;text-align:center;box-shadow:0 4px 6px rgba(0,0,0,0.1)}
+    .kpi h3{margin:0 0 5px;font-size:.85em;opacity:.8;text-transform:uppercase}
+    .kpi .val{font-size:1.6em;font-weight:bold}
     .chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:20px}
-    .chart-card{background:var(--card);padding:15px;border-radius:10px}
-    canvas{max-height:250px}
-    .btn{background:var(--acc);color:#fff;padding:8px 16px;border:none;border-radius:6px;cursor:pointer}
+    .chart-card{background:var(--card);padding:15px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1)}
+    canvas{max-height:220px}
+    .btn{background:var(--acc);color:#fff;padding:10px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600;transition:0.2s}
+    .btn:hover{opacity:0.9}
+    .toggle{display:flex;gap:8px;align-items:center}
+    .toggle button{padding:6px 12px;border:none;border-radius:4px;background:#334155;color:#94a3b8;cursor:pointer}
+    .toggle button.active{background:var(--succ);color:#fff}
   </style>
 </head>
 <body>
   <header>
     <h2>📊 Restinga Analytics</h2>
-    <button class="btn" onclick="generateData()">🔄 Cargar Datos Prueba (18 meses)</button>
+    <div class="toggle">
+      <span>Estado:</span>
+      <button class="active" onclick="setStatus('normal')">🟢</button>
+      <button onclick="setStatus('moderado')">🟡</button>
+      <button onclick="setStatus('lleno')">🔴</button>
+    </div>
+    <button class="btn" onclick="loadMockData()">🔄 Cargar 18 Meses Prueba</button>
   </header>
   <div class="kpi-grid">
     <div class="kpi"><h3>💰 Ventas Totales</h3><div class="val" id="kpi-sales">0 MAD</div></div>
@@ -45,42 +56,44 @@
   </div>
   <script>
     let charts = {};
-    const ctx = (id) => document.getElementById(id).getContext('2d');
-    function generateData() {
-      const months = 18;
-      const labels = [];
-      const sales=[], orders=[], users=[], avg=[], dom=[], topPlato="Couscous de ternera";
+    const ctx = id => document.getElementById(id).getContext('2d');
+    function setStatus(s) {
+      fetch('/api/restaurant/status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})})
+      .then(()=>location.reload());
+    }
+    function loadMockData() {
+      const months = 18, labels = [], sales=[], orders=[], users=[], avg=[], dom=[], platos=["Cuscús","Tajín","Paella","Brocheta","Ensalada"];
       const now = new Date();
-      for(let i=months-1; i>=0; i--){
+      for(let i=months-1;i>=0;i--){
         let d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-        labels.push(d.toLocaleString('default',{month:'short', year:'2-digit'}));
-        let o = Math.floor(Math.random()*300)+100;
-        let s = o*(Math.floor(Math.random()*60)+70);
-        orders.push(o); sales.push(s); users.push(Math.floor(o*0.8)); avg.push(Math.floor(s/o)); dom.push(Math.floor(Math.random()*40)+30);
+        labels.push(d.toLocaleString('default',{month:'short',year:'2-digit'}));
+        let o = Math.floor(Math.random()*250)+80;
+        let s = o*(Math.floor(Math.random()*50)+80);
+        orders.push(o); sales.push(s); users.push(Math.floor(o*0.75)); avg.push(Math.floor(s/o)); dom.push(Math.floor(Math.random()*40)+25);
       }
       document.getElementById('kpi-sales').textContent = sales.reduce((a,b)=>a+b,0).toLocaleString()+' MAD';
       document.getElementById('kpi-orders').textContent = orders.reduce((a,b)=>a+b,0).toLocaleString();
       document.getElementById('kpi-users').textContent = users.reduce((a,b)=>a+b,0).toLocaleString();
-      document.getElementById('kpi-avg').textContent = Math.round(orders.reduce((a,b)=>a+b,0)/sales.length*10)/10+' MAD';
+      document.getElementById('kpi-avg').textContent = Math.round(sales.reduce((a,b)=>a+b,0)/orders.length)+' MAD';
       document.getElementById('kpi-dom').textContent = dom[dom.length-1]+'%';
-      document.getElementById('kpi-top').textContent = topPlato;
+      document.getElementById('kpi-top').textContent = platos[0];
 
-      const draw = (id, type, data, label, color) => {
+      const draw = (id,type,data,label,color) => {
         if(charts[id]) charts[id].destroy();
-        charts[id] = new Chart(ctx(id), {type, data:{labels, datasets:[{label, data, borderColor:color, backgroundColor:color+'44', tension:.4, fill:true}]}, options:{responsive:true, plugins:{legend:{labels:{color:'#ccc'}}}, scales:{x:{ticks:{color:'#999'}}, y:{ticks:{color:'#999'}}}}});
+        charts[id] = new Chart(ctx(id), {type, data:{labels, datasets:[{label, data, borderColor:color, backgroundColor:color+'33', tension:.4, fill:true}]}, options:{responsive:true, plugins:{legend:{labels:{color:'#cbd5e1'}}}, scales:{x:{ticks:{color:'#94a3b8'}}, y:{ticks:{color:'#94a3b8'}}}}});
       };
       draw('c1','line',sales,'Ventas (MAD)','#3b82f6');
       draw('c2','bar',orders,'Pedidos','#10b981');
       draw('c3','line',users,'Clientes Únicos','#8b5cf6');
       draw('c4','line',avg,'Ticket Promedio','#f59e0b');
       draw('c5','bar',dom,'% Domicilio','#ef4444');
-      draw('c6','line',sales.map((_,i)=>i*5),'Crecimiento','#06b6d4');
-      draw('c7','bar',[45,30,25],'Métodos Pago (Efec/Tar/Trans)','#6366f1');
-      draw('c8','pie',[60,20,10,5,5],'Platos Top','#ec4899');
-      draw('c9','line',[2,3,1,4,2],'Reservas','#f97316');
-      draw('c10','bar',[12,18,15,22,19,25,28,20,16,24,21,17,23,26,20,18,22,25],'Horas Pico','#14b8a6');
+      draw('c6','line',[...orders].sort((a,b)=>b-a),'Top Mensual','#06b6d4');
+      draw('c7','pie',[45,30,25],'Métodos Pago (Efec/Tar/Trans)','#6366f1');
+      draw('c8','doughnut',[35,25,20,15,5],'Platos Top','#ec4899');
+      draw('c9','bar',[2,4,1,3,2,5,3,4,2,3,1,2,3,4,2,3,2,4],'Reservas','#f97316');
+      draw('c10','line',[12,18,15,22,19,25,28,20,16,24,21,17,23,26,20,18,22,25],'Horas Pico','#14b8a6');
     }
-    generateData();
+    window.onload = loadMockData;
   </script>
 </body>
 </html>
