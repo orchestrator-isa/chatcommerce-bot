@@ -175,11 +175,11 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf_map = {'spanish':'menu_es.pdf','english':'menu_en.pdf','french':'menu_fr.pdf','darija_latin':'menu_dar.pdf','darija_arabic':'menu_ar.pdf'}
-    pdf = pdf_map.get(lang, 'menu_es.pdf')
+    # ✅ FIX: Un solo PDF para todos los idiomas
+    pdf = 'menu_es.pdf'
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
-    data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":f"Menu_{lang}.pdf","caption":"📋 Menú completo"}}
+    data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages", headers={"Authorization":f"Bearer {WHATSAPP_TOKEN}","Content-Type":"application/json"}, json=data)
@@ -187,6 +187,7 @@ async def enviar_menu_pdf(to: str, lang: str) -> bool:
     except Exception as e:
         logger.error(f"❌ Error PDF: {e}")
         return False
+
 
 # ========== WHATSAPP ==========
 async def send_message(to: str, message: str) -> bool:
@@ -214,12 +215,10 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
         
-        # ✅ FIX: Sin .select() encadenado (no compatible con versión actual)
+        # ✅ FIX: Sin .select() encadenado (incompatible con tu versión de supabase-py)
         res = supabase.table("orders").insert(data).execute()
         
         if res.data:
-            # Si la tabla tiene columna 'numero', Supabase suele devolverla en el insert si se configura, 
-            # pero si no, usamos el ID o un fallback seguro.
             num = res.data[0].get("numero")
             return {"numero": str(num) if num is not None else "TEMP-" + uuid.uuid4().hex[:6].upper(), "id": res.data[0].get("id")}
         return {"error": "Failed", "numero": "???"}
@@ -318,11 +317,14 @@ async def process_message(body: dict):
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ COMANDO GLOBAL Q / SALIR
+                # 🚪 COMANDO GLOBAL SALIR / REINICIAR
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
-                    await send_message(user_id, "🔄 *Conversación reiniciada.*\nEscribe *HOLA* o *m* para empezar.")
+                    
+                    # ✅ FIX: Establecer fase a selección de idioma y mostrar opciones
+                    pedido_estado[user_id] = {"fase": "seleccion_idioma"}
+                    await send_message(user_id, "🔄 *Conversación reiniciada.*\n🌍 *Selecciona tu idioma:*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
