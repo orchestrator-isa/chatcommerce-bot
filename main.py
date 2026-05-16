@@ -308,6 +308,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
 # ========== PROCESAR MENSAJE (ESTRUCTURA CORRECTA v8.0) ==========
+# ========== PROCESAR MENSAJE ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -321,8 +322,8 @@ async def process_message(body: dict):
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
-                
-                # 1️⃣ DEFINIR VARIABLES PRIMERO (SOLUCIÓN CRASH 'fase')
+
+                # 1️⃣ VARIABLES CRÍTICAS (DEFINIDAS PRIMERO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
@@ -336,16 +337,15 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES DE FASE
+                # 3️⃣ VALIDACIONES (Ahora 'fase' YA existe)
+                if len(tl) > 300:
+                    await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
+                    continue
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
-                    if fase == "entrega" and tl not in ['1','2']:
-                        await send_message(user_id, "❌ Responde *1* o *2*."); continue
-                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']:
-                        await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
-                    if fase == "pago" and tl not in ['1','2','3']:
-                        await send_message(user_id, "❌ Elige *1*, *2* o *3*."); continue
-                    if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl:
-                        await send_message(user_id, "❌ Ej: `100` o `20EUR`."); continue
+                    if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
+                    if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
+                    if fase == "pago" and tl not in ['1','2','3']: await send_message(user_id, "❌ Elige *1*, *2* o *3*."); continue
+                    if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl: await send_message(user_id, "❌ Ej: `100` o `20EUR`."); continue
 
                 # 4️⃣ FASES
                 if fase == "seleccion_idioma":
