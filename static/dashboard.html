@@ -57,8 +57,7 @@
     let charts = {};
     const ctx = id => document.getElementById(id).getContext('2d');
     function setStatus(s) {
-      fetch('/api/restaurant/status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})})
-      .then(()=>location.reload());
+      fetch('/api/restaurant/status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})}).then(()=>location.reload());
     }
     function loadMockData() {
       const months = 18, labels = [], sales=[], orders=[], users=[], avg=[], dom=[], platos=["Cuscús","Tajín","Paella","Brocheta","Ensalada"];

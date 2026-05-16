@@ -94,7 +94,6 @@ async def load_phone_mapping():
             for r in supabase.table("valid_clients").select("telefono").execute().data:
                 clientes_validados.add(r.get("telefono",""))
         except: pass
-        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
 
 # ========== REGISTRAR MENSAJE ==========
@@ -121,11 +120,9 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
         if not res.data: return "📋 *MENÚ*\nNo hay platos disponibles.", []
         lines = ["📋 *MENÚ RESTINGA*", ""]
         for i, item in enumerate(res.data, 1):
-            # ✅ Traducción de Nombre: JSONB -> es -> dish_name
+            # ✅ FIX: Traducción desde Supabase (JSONB) o fallback a Español
             trad = item.get("translations", {})
             nombre = trad.get(lang_key) or trad.get('es') or item.get("dish_name", "Plato")
-            
-            # ✅ Traducción de Descripción: JSONB -> default
             desc = item.get("description", "")
             if isinstance(trad, dict) and trad.get(f"desc_{lang_key}"):
                 desc = trad[f"desc_{lang_key}"]
@@ -136,8 +133,7 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
             lines.append("")
         
         txt = "\n".join(lines)
-        # División por límite de WhatsApp (1600 chars)
-        if len(txt) > 1500:
+        if len(txt) > 1500: # WhatsApp limit split
             mid = len(txt) // 2
             return txt[:mid], res.data, txt[mid:]
         return txt, res.data, ""
@@ -169,8 +165,7 @@ async def get_cart(user_id: str, lang: str) -> str:
         if d["price"]==0: lineas.append(f"• {n} — 🆓 GRATIS (con bebida)")
         elif d["cant"]>1: lineas.append(f"• {n} x{d['cant']} — {d['cant']*d['price']} MAD")
         else: lineas.append(f"• {n} — {d['price']} MAD")
-    items_text = "\n".join(lineas)
-    return f"🛒 *TU PEDIDO*\n{items_text}\n💰 *TOTAL: {total} MAD*\nEscribe *c* para confirmar."
+    return f"🛒 *TU PEDIDO*\n{'\n'.join(lineas)}\n💰 *TOTAL: {total} MAD*\nEscribe *c* para confirmar."
 
 async def clear_cart(user_id: str, lang: str) -> str:
     if user_id in carts: carts[user_id] = []
@@ -184,8 +179,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    # ✅ Siempre el mismo PDF
-    pdf = 'menu_es.pdf' 
+    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -193,9 +187,7 @@ async def enviar_menu_pdf(to: str, lang: str) -> bool:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages", headers={"Authorization":f"Bearer {WHATSAPP_TOKEN}","Content-Type":"application/json"}, json=data)
             return r.status_code == 200
-    except Exception as e:
-        logger.error(f"❌ Error PDF: {e}")
-        return False
+    except: return False
 
 # ========== WHATSAPP ==========
 async def send_message(to: str, message: str) -> bool:
@@ -217,14 +209,12 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
-        
-        # ✅ FIX: Sin .select() encadenado para evitar error de versión
+        # ✅ FIX: Sin .select() encadenado (incompatible con versión actual)
         res = supabase.table("orders").insert(data).execute()
-        
         if res.data:
-            # Intentar obtener número SERIAL, si no, generar uno seguro
+            # Intentar obtener numero SERIAL, si no, generar uno seguro
             num = res.data[0].get("numero")
-            return {"numero": str(num) if num else f"ORD-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
+            return {"numero": str(num) if num else f"TEMP-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
         return {"error": "Failed", "numero": "???"}
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
@@ -304,7 +294,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     carts[user_id] = []; pedido_estado.pop(user_id, None)
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
-# ========== PROCESAR MENSAJE (ESTRUCTURA CORRECTA v8.0) ==========
+# ========== PROCESAR MENSAJE (ORDEN CORRECTO v8.0) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -318,8 +308,8 @@ async def process_message(body: dict):
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
-
-                # 1️⃣ VARIABLES CRÍTICAS (DEFINIDAS PRIMERO)
+                
+                # 1️⃣ DEFINIR VARIABLES CRÍTICAS PRIMERO (SOLUCIÓN CRASH 'fase')
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
@@ -333,7 +323,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES DE FASE (Ahora 'fase' YA existe)
+                # 3️⃣ VALIDACIONES (Ahora 'fase' YA existe)
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
                     if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
@@ -372,7 +362,7 @@ async def process_message(body: dict):
                     except: await send_message(user_id, "❌ Formato no reconocido.")
                     continue
 
-                # 5️⃣ COMANDOS (Solo 'if', CERO duplicados)
+                # 5️⃣ COMANDOS
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
                     await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
@@ -403,7 +393,6 @@ async def process_message(body: dict):
                     resto = tl[1:].strip()
                     await send_message(user_id, await remove_from_cart_by_index(user_id, int(resto), lang) if resto.isdigit() else await clear_cart(user_id, lang))
                     continue
-                
                 await send_message(user_id, LanguageDetector.get_help(lang))
 
 # ========== ENDPOINTS ==========
@@ -436,4 +425,3 @@ async def startup(): await load_phone_mapping()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
-# v8.0 PROD - Forced deploy
