@@ -95,6 +95,7 @@ async def load_phone_mapping():
             for r in supabase.table("valid_clients").select("telefono").execute().data:
                 clientes_validados.add(r.get("telefono",""))
         except: pass
+        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
 
 # ========== REGISTRAR MENSAJE ==========
@@ -107,9 +108,7 @@ async def registrar_mensaje(user_id: str, direccion: str, mensaje: str, intent: 
             supabase.table("sessions").insert({"id":sid,"user_id":user_id,"inicio":datetime.now().isoformat(),"estado":"activa"}).execute()
         try:
             supabase.table("messages").insert({"session_id":sid,"direccion":direccion,"message":mensaje[:500],"intent":intent,"created_at":datetime.now().isoformat()}).execute()
-        except Exception as e:
-            if "pgrst204" in str(e).lower() or "session_id" in str(e).lower():
-                supabase.table("messages").insert({"direccion":direccion,"message":mensaje[:500],"intent":intent,"created_at":datetime.now().isoformat()}).execute()
+        except: pass
     except Exception as e: logger.error(f"❌ registrar: {e}")
 
 # ========== MENÚ & CARRITO ==========
@@ -123,12 +122,23 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
         if not res.data: return "📋 *MENÚ*\nNo hay platos disponibles.", []
         lines = ["📋 *MENÚ RESTINGA*", ""]
         for i, item in enumerate(res.data, 1):
+            # ✅ FIX: Soporte multiidioma para nombre y descripción
             trad = item.get("translations", {})
             nombre = trad.get(lang_key) or trad.get('es') or item.get("dish_name", "Plato")
+            
+            # Intentar obtener descripción traducida si existe en JSONB o fallback
+            desc = item.get("description", "")
+            if isinstance(trad, dict) and trad.get(f"desc_{lang_key}"):
+                desc = trad[f"desc_{lang_key}"]
+            elif isinstance(trad, dict) and trad.get("description"):
+                 # A veces el JSON viene con clave description anidada
+                 desc = trad["description"]
+
             p = "🆓 GRATIS con bebida" if item.get("price",0)==0 else f"{item['price']} MAD"
             lines.append(f"{i}. *{nombre}* — {p}")
-            if item.get("description"): lines.append(f"   {item['description']}")
+            if desc: lines.append(f"   {desc}")
             lines.append("")
+        
         txt = "\n".join(lines)
         # WhatsApp corta ~1600 chars. Dividimos si es necesario:
         if len(txt) > 1500:
@@ -178,7 +188,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
+    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF como solicitaste
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -210,8 +220,10 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
-        # ✅ FIX: Sin .select() (incompatible con versión actual)
+        
+        # ✅ FIX: Sin .select() encadenado para evitar error de versión
         res = supabase.table("orders").insert(data).execute()
+        
         if res.data:
             num = res.data[0].get("numero")
             return {"numero": str(num) if num else f"TEMP-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
@@ -238,6 +250,7 @@ async def procesar_entrega(user_id: str, text: str, lang: str) -> str:
 
 async def procesar_zona(user_id: str, text: str, lang: str) -> str:
     tl = text.lower().strip()
+    # ✅ FIX: Manejar respuesta "No" correctamente
     if tl in ['no', 'n', 'nah']:
         pedido_estado[user_id].update({"tipo_entrega": "recoger", "fase": "pago"})
         total = sum(i["price"] for i in carts.get(user_id, []))
@@ -309,7 +322,7 @@ async def process_message(body: dict):
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
                 
-                # 1️⃣ DEFINIR VARIABLES PRIMERO (CRÍTICO)
+                # 1️⃣ DEFINIR VARIABLES PRIMERO (SOLUCIÓN CRASH 'fase')
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
@@ -326,7 +339,7 @@ async def process_message(body: dict):
                 # 3️⃣ VALIDACIONES DE FASE
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
                     if fase == "entrega" and tl not in ['1','2']:
-                        await send_message(user_id, "❌ Responde *1* (Recoger) o *2* (Domicilio)."); continue
+                        await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']:
                         await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
                     if fase == "pago" and tl not in ['1','2','3']:
