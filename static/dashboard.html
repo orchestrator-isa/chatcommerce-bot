@@ -1,86 +1,86 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Restinga Dispatcher</title>
-    <style>
-        :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--green:#10b981;--yellow:#f59e0b;--red:#ef4444;--blue:#3b82f6}
-        body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px}
-        header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-        .status-bar{display:flex;gap:10px}
-        .btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
-        .btn-n{background:var(--green);color:#fff}
-        .btn-m{background:var(--yellow);color:#000}
-        .btn-l{background:var(--red);color:#fff}
-        .btn.active{box-shadow:0 0 0 3px #fff}
-        table{width:100%;border-collapse:collapse;background:var(--card);border-radius:8px;overflow:hidden}
-        th,td{padding:12px;text-align:left;border-bottom:1px solid #334155}
-        th{background:#0f172a}
-        .badge{padding:4px 8px;border-radius:4px;font-size:0.8em}
-        .b-nuevo{background:var(--blue)} .b-cocina{background:var(--yellow)} .b-listo{background:var(--green)}
-        #login{position:fixed;inset:0;background:#00000080;display:flex;align-items:center;justify-content:center}
-        .box{background:var(--card);padding:30px;border-radius:12px;text-align:center}
-        input{padding:10px;border-radius:6px;border:none;width:200px;margin:10px 0}
-        .refresh{position:fixed;bottom:20px;right:20px;background:var(--blue);color:#fff;padding:10px;border-radius:50%;cursor:pointer}
-    </style>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Restinga - Analytics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{--bg:#0f172a;--card:#1e293b;--text:#f8fafc;--acc:#3b82f6;--succ:#10b981;--warn:#f59e0b;--danger:#ef4444}
+    body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
+    .kpi{background:var(--card);padding:15px;border-radius:10px;text-align:center}
+    .kpi h3{margin:0 0 5px;font-size:.9em;opacity:.8}
+    .kpi .val{font-size:1.8em;font-weight:bold}
+    .chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:20px}
+    .chart-card{background:var(--card);padding:15px;border-radius:10px}
+    canvas{max-height:250px}
+    .btn{background:var(--acc);color:#fff;padding:8px 16px;border:none;border-radius:6px;cursor:pointer}
+  </style>
 </head>
 <body>
-    <div id="login">
-        <div class="box">
-            <h2>🔐 Acceso Dispatcher</h2>
-            <input type="password" id="pass" placeholder="Contraseña">
-            <br><button class="btn btn-n" onclick="auth()">Entrar</button>
-        </div>
-    </div>
+  <header>
+    <h2>📊 Restinga Analytics</h2>
+    <button class="btn" onclick="generateData()">🔄 Cargar Datos Prueba (18 meses)</button>
+  </header>
+  <div class="kpi-grid">
+    <div class="kpi"><h3>💰 Ventas Totales</h3><div class="val" id="kpi-sales">0 MAD</div></div>
+    <div class="kpi"><h3>📦 Pedidos</h3><div class="val" id="kpi-orders">0</div></div>
+    <div class="kpi"><h3>👥 Clientes Únicos</h3><div class="val" id="kpi-users">0</div></div>
+    <div class="kpi"><h3>💳 Ticket Promedio</h3><div class="val" id="kpi-avg">0 MAD</div></div>
+    <div class="kpi"><h3>🏠 Domicilio</h3><div class="val" id="kpi-dom">0%</div></div>
+    <div class="kpi"><h3>🍽️ Plato Top</h3><div class="val" id="kpi-top">-</div></div>
+  </div>
+  <div class="chart-grid">
+    <div class="chart-card"><canvas id="c1"></canvas></div>
+    <div class="chart-card"><canvas id="c2"></canvas></div>
+    <div class="chart-card"><canvas id="c3"></canvas></div>
+    <div class="chart-card"><canvas id="c4"></canvas></div>
+    <div class="chart-card"><canvas id="c5"></canvas></div>
+    <div class="chart-card"><canvas id="c6"></canvas></div>
+    <div class="chart-card"><canvas id="c7"></canvas></div>
+    <div class="chart-card"><canvas id="c8"></canvas></div>
+    <div class="chart-card"><canvas id="c9"></canvas></div>
+    <div class="chart-card"><canvas id="c10"></canvas></div>
+  </div>
+  <script>
+    let charts = {};
+    const ctx = (id) => document.getElementById(id).getContext('2d');
+    function generateData() {
+      const months = 18;
+      const labels = [];
+      const sales=[], orders=[], users=[], avg=[], dom=[], topPlato="Couscous de ternera";
+      const now = new Date();
+      for(let i=months-1; i>=0; i--){
+        let d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+        labels.push(d.toLocaleString('default',{month:'short', year:'2-digit'}));
+        let o = Math.floor(Math.random()*300)+100;
+        let s = o*(Math.floor(Math.random()*60)+70);
+        orders.push(o); sales.push(s); users.push(Math.floor(o*0.8)); avg.push(Math.floor(s/o)); dom.push(Math.floor(Math.random()*40)+30);
+      }
+      document.getElementById('kpi-sales').textContent = sales.reduce((a,b)=>a+b,0).toLocaleString()+' MAD';
+      document.getElementById('kpi-orders').textContent = orders.reduce((a,b)=>a+b,0).toLocaleString();
+      document.getElementById('kpi-users').textContent = users.reduce((a,b)=>a+b,0).toLocaleString();
+      document.getElementById('kpi-avg').textContent = Math.round(orders.reduce((a,b)=>a+b,0)/sales.length*10)/10+' MAD';
+      document.getElementById('kpi-dom').textContent = dom[dom.length-1]+'%';
+      document.getElementById('kpi-top').textContent = topPlato;
 
-    <div id="app" style="display:none">
-        <header>
-            <h2>📋 Restinga - Dispatcher</h2>
-            <div class="status-bar">
-                <span>Estado:</span>
-                <button class="btn btn-n" onclick="setStatus('normal')">🟢 Normal</button>
-                <button class="btn btn-m" onclick="setStatus('moderado')">🟡 Moderado</button>
-                <button class="btn btn-l" onclick="setStatus('lleno')">🔴 Lleno</button>
-            </div>
-        </header>
-        <table>
-            <thead><tr><th>#</th><th>Cliente</th><th>Total</th><th>Tipo</th><th>Pago</th><th>Estado</th><th>Hora</th></tr></thead>
-            <tbody id="orders"></tbody>
-        </table>
-    </div>
-    <div class="refresh" onclick="loadData()">🔄</div>
-
-    <script>
-        let PASS = prompt("🔐 Contraseña Dispatcher:") || '';
-        if(PASS !== 'restinga2026') location.reload();
-        document.getElementById('login').style.display='none';
-        document.getElementById('app').style.display='block';
-        loadData(); setInterval(loadData, 15000);
-
-        async function loadData(){
-            try{
-                const r = await fetch('/api/orders').then(r=>r.json());
-                const tb = document.getElementById('orders');
-                tb.innerHTML = (r.data||[]).map(o=>`
-                    <tr>
-                        <td>#${o.numero||o.id.slice(0,6)}</td>
-                        <td>${o.cliente_telefono?.slice(-4)||'---'}</td>
-                        <td>${o.total_mad} MAD</td>
-                        <td>${o.tipo_entrega||'recoger'}</td>
-                        <td>${o.metodo_pago||'---'}</td>
-                        <td><span class="badge b-${o.estado}">${o.estado}</span></td>
-                        <td>${new Date(o.created_at).toLocaleTimeString()}</td>
-                    </tr>`).join('');
-            }catch(e){tb.innerHTML='<tr><td colspan="7">⚠️ Error cargando pedidos</td></tr>';}
-        }
-        async function setStatus(s){
-            try{
-                await fetch('/api/restaurant/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})});
-                document.querySelectorAll('.status-bar .btn').forEach(b=>b.classList.remove('active'));
-                document.querySelector(`.btn-${s[0]}`).classList.add('active');
-            }catch(e){alert('Error cambiando estado');}
-        }
-    </script>
+      const draw = (id, type, data, label, color) => {
+        if(charts[id]) charts[id].destroy();
+        charts[id] = new Chart(ctx(id), {type, data:{labels, datasets:[{label, data, borderColor:color, backgroundColor:color+'44', tension:.4, fill:true}]}, options:{responsive:true, plugins:{legend:{labels:{color:'#ccc'}}}, scales:{x:{ticks:{color:'#999'}}, y:{ticks:{color:'#999'}}}}});
+      };
+      draw('c1','line',sales,'Ventas (MAD)','#3b82f6');
+      draw('c2','bar',orders,'Pedidos','#10b981');
+      draw('c3','line',users,'Clientes Únicos','#8b5cf6');
+      draw('c4','line',avg,'Ticket Promedio','#f59e0b');
+      draw('c5','bar',dom,'% Domicilio','#ef4444');
+      draw('c6','line',sales.map((_,i)=>i*5),'Crecimiento','#06b6d4');
+      draw('c7','bar',[45,30,25],'Métodos Pago (Efec/Tar/Trans)','#6366f1');
+      draw('c8','pie',[60,20,10,5,5],'Platos Top','#ec4899');
+      draw('c9','line',[2,3,1,4,2],'Reservas','#f97316');
+      draw('c10','bar',[12,18,15,22,19,25,28,20,16,24,21,17,23,26,20,18,22,25],'Horas Pico','#14b8a6');
+    }
+    generateData();
+  </script>
 </body>
 </html>
