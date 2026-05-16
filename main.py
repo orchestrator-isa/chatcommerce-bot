@@ -436,3 +436,4 @@ async def startup(): await load_phone_mapping()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
+# v8.0 PROD - Forced deploy
