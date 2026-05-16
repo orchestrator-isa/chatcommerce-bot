@@ -288,6 +288,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
 # ========== PROCESAR MENSAJE ==========
+# ========== PROCESAR MENSAJE ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -304,12 +305,13 @@ async def process_message(body: dict):
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
                 
-                # 1️⃣ DEFINIR VARIABLES CRÍTICAS PRIMERO (SOLUCIÓN AL CRASH)
+                # ✅ 1. DEFINIR VARIABLES CRÍTICAS PRIMERO (SOLUCIÓN AL CRASH)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
+                # 'fase' debe definirse AQUÍ antes de usarla
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ COMANDO GLOBAL (Funciona en cualquier fase)
+                # 2. COMANDO GLOBAL SALIR
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
@@ -317,7 +319,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES (Ahora 'fase' ya existe y es seguro usarla)
+                # 3. VALIDACIONES RÁPIDAS
                 if len(tl) > 300:
                     await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
                     continue
@@ -336,7 +338,7 @@ async def process_message(body: dict):
                         await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
                         continue
 
-                # 4️⃣ MANEJO DE FASES
+                # 4. MANEJO DE FASES
                 if fase == "seleccion_idioma":
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
                     if txt in mapas:
@@ -358,10 +360,10 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", resp)
                     continue
                 
-                # Fases de reserva
                 if fase == "reserva_personas":
                     if tl.isdigit() and 1<=int(tl)<=20:
-                        pedido_estado[user_id]["people"] = int(tl); pedido_estado[user_id]["fase"] = "reserva_fecha"
+                        pedido_estado[user_id]["people"] = int(tl)
+                        pedido_estado[user_id]["fase"] = "reserva_fecha"
                         await send_message(user_id, "🕐 ¿Para qué día y hora? Ej: 'Mañana 20:00' o '15/05 21:30'")
                     else: await send_message(user_id, "❌ Número entre 1 y 20.")
                     continue
@@ -381,7 +383,7 @@ async def process_message(body: dict):
                     except: await send_message(user_id, "❌ Formato no reconocido.")
                     continue
 
-                # 5️⃣ COMANDOS PRINCIPALES
+                # 5. COMANDOS PRINCIPALES
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
                     if user_id not in user_lang or not user_idioma_manual.get(user_id, False):
@@ -430,7 +432,7 @@ async def process_message(body: dict):
                     await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
                     continue
                 
-                # Fallback
+                # Fallback final
                 await send_message(user_id, LanguageDetector.get_help(lang))
 
 @app.get("/")
