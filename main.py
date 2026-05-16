@@ -296,18 +296,20 @@ async def process_message(body: dict):
             meta = val.get("metadata", {})
             phone = meta.get("display_phone_number", "").replace("+","")
             client_id = phone_to_restaurant.get(phone, "44444444-4444-4444-4444-444444444444")
+            
             for msg in val.get("messages", []):
                 if msg.get("type") != "text": continue
+                
                 user_id = msg.get("from")
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
                 
-                # ✅ 1. DEFINIR VARIABLES PRIMERO (CRÍTICO)
+                # 1️⃣ DEFINIR VARIABLES CRÍTICAS PRIMERO (SOLUCIÓN AL CRASH)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 🚪 2. COMANDO GLOBAL SALIR
+                # 2️⃣ COMANDO GLOBAL (Funciona en cualquier fase)
                 if tl in ['salir', 'exit', 'q', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
@@ -315,7 +317,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 🛡️ 3. VALIDACIONES RÁPIDAS (Aquí 'fase' YA existe)
+                # 3️⃣ VALIDACIONES (Ahora 'fase' ya existe y es seguro usarla)
                 if len(tl) > 300:
                     await send_message(user_id, "⚠️ Mensaje muy largo. Escribe *m* o *q*.")
                     continue
@@ -333,6 +335,7 @@ async def process_message(body: dict):
                     if fase == "cash_bill" and not tl.isdigit() and 'eur' not in tl and '€' not in tl:
                         await send_message(user_id, "❌ Ej: `100` o `20EUR`.")
                         continue
+
                 # 4️⃣ MANEJO DE FASES
                 if fase == "seleccion_idioma":
                     mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
@@ -346,7 +349,7 @@ async def process_message(body: dict):
                     else: 
                         await send_message(user_id, "❌ Opción no válida. Responde solo con el número: *1*, *2*, *3*, *4* o *5*.")
                     continue
-
+                
                 if fase in ["entrega","check_zona","direccion","pago","cash_bill","transfer_pending"]:
                     funcs = {"entrega":procesar_entrega,"check_zona":procesar_zona,"direccion":procesar_direccion,"pago":procesar_pago,"cash_bill":procesar_billete,"transfer_pending":procesar_transferencia}
                     inp = txt if fase=="direccion" else tl
@@ -355,6 +358,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", resp)
                     continue
                 
+                # Fases de reserva
                 if fase == "reserva_personas":
                     if tl.isdigit() and 1<=int(tl)<=20:
                         pedido_estado[user_id]["people"] = int(tl); pedido_estado[user_id]["fase"] = "reserva_fecha"
@@ -377,7 +381,7 @@ async def process_message(body: dict):
                     except: await send_message(user_id, "❌ Formato no reconocido.")
                     continue
 
-                # 5️⃣ COMANDOS PRINCIPALES (Solo 'if', NO 'elif')
+                # 5️⃣ COMANDOS PRINCIPALES
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
                     if user_id not in user_lang or not user_idioma_manual.get(user_id, False):
@@ -426,8 +430,9 @@ async def process_message(body: dict):
                     await send_message(user_id, resp); await registrar_mensaje(user_id, "outgoing", resp)
                     continue
                 
-                # Fallback final
+                # Fallback
                 await send_message(user_id, LanguageDetector.get_help(lang))
+
 @app.get("/")
 async def root(): return {"status":"ok","version":VERSION,"service":"Orquestrator ISA"}
 @app.get("/health")
