@@ -34,10 +34,13 @@ LANGUAGES: Dict[str, dict] = {}
 if LANG_DIR.exists():
     for f in LANG_DIR.glob("*.json"):
         try:
-            with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
-            logger.info(f"✅ Idioma cargado: {f.stem}")
-        except Exception as e: logger.error(f"❌ Error cargando {f}: {e}")
-else: LANG_DIR.mkdir(exist_ok=True)
+            with open(f, "r", encoding="utf-8") as fh:
+                LANGUAGES[f.stem] = json.load(fh)
+                logger.info(f"✅ Idioma cargado: {f.stem}")
+        except Exception as e:
+            logger.error(f"❌ Error cargando {f}: {e}")
+else:
+    LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
 
@@ -176,7 +179,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf'
+    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -206,7 +209,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
-        res = supabase.table("orders").insert(data).execute()
+        res = supabase.table("orders").insert(data).execute() # ✅ Sin .select()
         if res.data:
             num = res.data[0].get("numero")
             return {"numero": str(num) if num else f"ORD-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
