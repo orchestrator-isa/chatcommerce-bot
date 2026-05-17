@@ -178,8 +178,8 @@ async def process_message(body: dict):
 
                 # 1️⃣ VARIABLES CRÍTICAS (PRIMERO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
-                fase = pedido_estado.get(user_id, {}).get("fase", "inicio")  # ✅ Definida ANTES de usarse
-
+                await registrar_mensaje(user_id, "incoming", txt)
+                fase = pedido_estado.get(user_id, {}).get("fase", "inicio")  
                 # 2️⃣ COMANDO Q
                 if tl in ['q', 'salir', 'exit', 'reiniciar']:
                     carts[user_id] = []
