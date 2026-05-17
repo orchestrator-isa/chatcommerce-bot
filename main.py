@@ -36,6 +36,7 @@ if LANG_DIR.exists():
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 LANGUAGES[f.stem] = json.load(fh)
+                logger.info(f"✅ Idioma cargado: {f.stem}")
         except Exception as e:
             logger.error(f"❌ Error cargando {f}: {e}")
 else:
@@ -179,7 +180,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
     pdf = 'menu_es.pdf'
-    base = os.getenv("RENDER_EXTERNAL_URL", "https://chatcommerce-bot.onrender.com") # URL DEL PAGO
+    base = os.getenv("RENDER_EXTERNAL_URL", "https://chatcommerce-bot.onrender.com") # URL de tu servicio pagado
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
     try:
@@ -293,7 +294,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     carts[user_id] = []; pedido_estado.pop(user_id, None)
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
-# ========== PROCESAR MENSAJE (v8.2) ==========
+# ========== PROCESAR MENSAJE (v8.2-STABLE) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
