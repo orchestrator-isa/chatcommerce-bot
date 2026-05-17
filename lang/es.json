@@ -1,7 +1,7 @@
 {
   "welcome": "👋 ¡Hola! Bienvenido a Restinga Restaurant.",
-  "help": "📋 *Comandos Rápidos*\n* *m* - 📜 Ver Menú\n* *v* - 🛒 Ver Carrito\n* *x* - 🗑️ Eliminar\n* *c* - ✅ Confirmar\n* *q* - 🔄 Salir/Reiniciar\n* *r* - 📅 Reservar Mesa\n* *1,2,3...* - Añadir plato",
-  "cart_empty": "🛒 Tu carrito está vacío.\n💡 Escribe *m* para ver el menú y añade platos con su número.",
+  "help": "📋 *Comandos Rápidos*\n* *m* - 📜 Ver Menú\n* *v* - 🛒 Ver Carrito\n* *x* - 🗑️ Eliminar (ej: x 1)\n* *c* - ✅ Confirmar\n* *q* - 🔄 Salir/Reiniciar\n* *r* - 📅 Reservar Mesa\n* *1,2,3...* - Añadir plato",
+  "cart_empty": "🛒 Tu carrito está vacío.\n💡 Escribe *m* para ver el menú.",
   "added_to_cart": "✅ *{cantidad} x {nombre}* añadido.\n💰 Subtotal: {total} MAD",
   "removed_item": "🗑️ *{cantidad} x {nombre}* eliminado.\n💰 Nuevo total: {total} MAD",
   "delivery_type": "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio",
