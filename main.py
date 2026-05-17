@@ -316,7 +316,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES DE FASE
+                # 3️⃣ VALIDACIONES DE FASE (Ahora 'fase' YA existe)
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
                     if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
@@ -411,3 +411,4 @@ async def startup(): await load_phone_mapping()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
+# v8.0 FINAL DEPLOY
