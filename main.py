@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from supabase import create_client, Client
 from typing import Dict, List, Optional
 
-VERSION = "8.0-RESTINGA-FINAL"
+VERSION = "8.0-RESTINGA-PROD"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("isa-bot")
 
@@ -179,7 +179,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
+    pdf = 'menu_es.pdf'
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -209,7 +209,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
-        res = supabase.table("orders").insert(data).execute() # ✅ Sin .select()
+        res = supabase.table("orders").insert(data).execute() # Sin .select()
         if res.data:
             num = res.data[0].get("numero")
             return {"numero": str(num) if num else f"ORD-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
@@ -310,7 +310,7 @@ async def process_message(body: dict):
                 # 1️⃣ VARIABLES CRÍTICAS (DEFINIDAS PRIMERO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
-                fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
+                fase = pedido_estado.get(user_id, {}).get("fase", "inicio") # ¡¡IMPORTANTE!! Aquí se define fase
 
                 # 2️⃣ COMANDO Q / SALIR (Reinicia a idiomas)
                 if tl in ['q', 'salir', 'exit', 'esc', 'reiniciar', 'cancelar', 'adios']:
@@ -416,4 +416,3 @@ async def startup(): await load_phone_mapping()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
-# v8.0 FINAL DEPLOY
