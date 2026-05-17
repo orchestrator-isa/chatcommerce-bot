@@ -31,17 +31,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # ========== IDIOMAS ==========
 LANG_DIR = Path("lang")
 LANGUAGES: Dict[str, dict] = {}
-
 if LANG_DIR.exists():
     for f in LANG_DIR.glob("*.json"):
         try:
-            with open(f, "r", encoding="utf-8") as fh:
-                LANGUAGES[f.stem] = json.load(fh)
-                logger.info(f"✅ Idioma cargado: {f.stem}")
-        except Exception as e:
-            logger.error(f"❌ Error cargando {f}: {e}")
-else:
-    LANG_DIR.mkdir(exist_ok=True)
+            with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
+            logger.info(f"✅ Idioma cargado: {f.stem}")
+        except Exception as e: logger.error(f"❌ Error cargando {f}: {e}")
+else: LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
 
@@ -417,3 +413,4 @@ async def startup(): await load_phone_mapping()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
+# v8.0 FINAL DEPLOY
