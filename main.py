@@ -179,8 +179,8 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf'
-    base = os.getenv("RENDER_EXTERNAL_URL", "https://chatcommerce-bot.onrender.com") # URL de tu servicio pagado
+    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
+    base = os.getenv("RENDER_EXTERNAL_URL", "https://chatcommerce-bot.onrender.com") # ✅ URL del servicio pagado
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
     try:
@@ -210,11 +210,12 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
         
-        # ✅ Sin .select()
+        # ✅ Sin .select() encadenado
         res = supabase.table("orders").insert(data).execute()
         if res.data:
-            num = res.data[0].get("numero")
-            return {"numero": str(num) if num else f"ORD-{uuid.uuid4().hex[:6].upper()}", "id": res.data[0].get("id")}
+            # Render devuelve el ID, intentamos leer 'numero' si existe la columna SERIAL
+            num = res.data[0].get("numero") or res.data[0].get("id")[-6:].upper()
+            return {"numero": str(num), "id": res.data[0].get("id")}
         return {"error": "Failed", "numero": "???"}
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
@@ -294,7 +295,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     carts[user_id] = []; pedido_estado.pop(user_id, None)
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
-# ========== PROCESAR MENSAJE (v8.2-STABLE) ==========
+# ========== PROCESAR MENSAJE (v8.2) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
