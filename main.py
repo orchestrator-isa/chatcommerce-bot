@@ -35,8 +35,7 @@ if LANG_DIR.exists():
     for f in LANG_DIR.glob("*.json"):
         try:
             with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
-            logger.info(f"✅ Idioma cargado: {f.stem}")
-        except Exception as e: logger.error(f"❌ Error cargando {f}: {e}")
+        except Exception as e: logger.error(f"❌ Error cargando idioma {f}: {e}")
 else: LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
@@ -95,7 +94,6 @@ async def load_phone_mapping():
             for r in supabase.table("valid_clients").select("telefono").execute().data:
                 clientes_validados.add(r.get("telefono",""))
         except: pass
-        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
 
 # ========== REGISTRAR MENSAJE ==========
@@ -122,7 +120,6 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool 
         if not res.data: return "📋 *MENÚ*\nNo hay platos disponibles.", []
         lines = ["📋 *MENÚ RESTINGA*", ""]
         for i, item in enumerate(res.data, 1):
-            # ✅ Traducción desde JSONB
             trad = item.get("translations", {}) or {}
             nombre = trad.get(lang_key) or trad.get('es') or item.get("dish_name", "Plato")
             desc = trad.get(f"desc_{lang_key}") or item.get("description", "")
@@ -177,7 +174,7 @@ async def remove_from_cart_by_index(user_id: str, idx: int, lang: str) -> str:
 # ========== PDF UNIVERSAL ==========
 async def enviar_menu_pdf(to: str, lang: str) -> bool:
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
-    pdf = 'menu_es.pdf' # ✅ Siempre el mismo PDF
+    pdf = 'menu_es.pdf'
     base = os.getenv("RENDER_EXTERNAL_URL", "https://mi-bot-restinga-test.onrender.com")
     url = f"{base}/static/{pdf}"
     data = {"messaging_product":"whatsapp","to":to,"type":"document","document":{"link":url,"filename":"Menu_Restinga.pdf","caption":"📋 Menú completo / Full Menu"}}
@@ -207,7 +204,6 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         items_json = [{"name": i["name"], "price": i["price"], "cantidad": i.get("cantidad", 1)} for i in items]
         data = {"client_id": client_id, "cliente_telefono": user_id, "items_json": items_json, "total_mad": total, "estado": "nuevo", "tipo_entrega": tipo, "direccion": direccion, "metodo_pago": metodo, "billete": billete, "pagado": metodo != "transferencia", "created_at": datetime.now().isoformat()}
-        # ✅ FIX: Sin .select() encadenado
         res = supabase.table("orders").insert(data).execute()
         if res.data:
             num = res.data[0].get("numero")
@@ -320,7 +316,7 @@ async def process_message(body: dict):
                     await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES DE FASE
+                # 3️⃣ VALIDACIONES DE FASE (Ahora 'fase' YA existe)
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
                     if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
