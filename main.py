@@ -35,8 +35,7 @@ if LANG_DIR.exists():
     for f in LANG_DIR.glob("*.json"):
         try:
             with open(f, "r", encoding="utf-8") as fh: LANGUAGES[f.stem] = json.load(fh)
-            logger.info(f"✅ Idioma cargado: {f.stem}")
-        except Exception as e: logger.error(f"❌ Error cargando {f}: {e}")
+        except Exception as e: logger.error(f"❌ Error cargando idioma {f}: {e}")
 else: LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
@@ -95,7 +94,6 @@ async def load_phone_mapping():
             for r in supabase.table("valid_clients").select("telefono").execute().data:
                 clientes_validados.add(r.get("telefono",""))
         except: pass
-        logger.info(f"📞 {len(phone_to_restaurant)} restaurantes mapeados")
     except Exception as e: logger.error(f"Error mapeo: {e}")
 
 # ========== REGISTRAR MENSAJE ==========
@@ -289,7 +287,7 @@ async def procesar_transferencia(user_id: str, lang: str) -> str:
     carts[user_id] = []; pedido_estado.pop(user_id, None)
     return get_text(lang, 'order_confirmed', numero="???", total=total, metodo="Transferencia (pendiente)", tiempo="5-10 min")
 
-# ========== PROCESAR MENSAJE (CORRECTO) ==========
+# ========== PROCESAR MENSAJE (ESTRUCTURA CORRECTA v8.0) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
@@ -304,20 +302,21 @@ async def process_message(body: dict):
                 txt = msg.get("text", {}).get("body", "").strip()
                 tl = txt.lower()
 
-                # 1️⃣ VARIABLES PRIMERO (¡CRÍTICO!)
+                # 1️⃣ VARIABLES CRÍTICAS (DEFINIDAS PRIMERO)
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 await registrar_mensaje(user_id, "incoming", txt)
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ SALIR
+                # 2️⃣ COMANDO Q / SALIR (Reinicia a idiomas)
                 if tl in ['q', 'salir', 'exit', 'esc', 'reiniciar', 'cancelar', 'adios']:
                     if user_id in carts: del carts[user_id]
                     if user_id in pedido_estado: del pedido_estado[user_id]
                     pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                     await send_message(user_id, "🌍 *Selecciona tu idioma:*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
+                    await registrar_mensaje(user_id, "outgoing", "reinicio")
                     continue
 
-                # 3️⃣ VALIDACIONES (fase YA existe)
+                # 3️⃣ VALIDACIONES DE FASE
                 if fase in ["entrega","check_zona","pago","cash_bill"]:
                     if fase == "entrega" and tl not in ['1','2']: await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     if fase == "check_zona" and tl not in ['si','sí','yes','oui','no','n']: await send_message(user_id, "❌ Responde *Sí* o *No*."); continue
@@ -326,8 +325,8 @@ async def process_message(body: dict):
 
                 # 4️⃣ FASES
                 if fase == "seleccion_idioma":
-                    if txt in {'1','2','3','4','5'}:
-                        mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
+                    mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin','5':'darija_arabic'}
+                    if txt in mapas:
                         user_lang[user_id] = mapas[txt]; user_idioma_manual[user_id] = True
                         await send_message(user_id, f"{LanguageDetector.get_welcome(user_lang[user_id])}\n{LanguageDetector.get_help(user_lang[user_id])}")
                         pedido_estado.pop(user_id, None)
@@ -355,7 +354,7 @@ async def process_message(body: dict):
                     except: await send_message(user_id, "❌ Formato no reconocido.")
                     continue
 
-                # 5️⃣ COMANDOS
+                # 5️⃣ COMANDOS (Solo 'if', CERO duplicados)
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
                     await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
@@ -372,12 +371,11 @@ async def process_message(body: dict):
                     if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0: await send_message(user_id, "⚠️ Carrito vacío.")
                     else: await send_message(user_id, await iniciar_entrega(user_id, lang))
                     continue
-                if tl in ['r','reservar']:
+                if tl in ['r','reservar','reservación','reservation','book','table']:
                     pedido_estado[user_id] = {"fase": "reserva_personas"}
                     await send_message(user_id, "📅 *Reservar mesa*\n¿Para cuántas personas? (1-20)")
                     continue
                 if tl.isdigit(): await send_message(user_id, await add_to_cart(user_id, int(tl), 1, client_id, lang))
-                    continue
                 if tl.startswith('x'):
                     resto = tl[1:].strip()
                     await send_message(user_id, await remove_from_cart_by_index(user_id, int(resto), lang) if resto.isdigit() else await clear_cart(user_id, lang))
