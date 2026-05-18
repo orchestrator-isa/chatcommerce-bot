@@ -229,15 +229,15 @@ async def process_message(body: dict):
                 if tl in ['v','pedido','order','cart']:
                     await send_message(user_id, await get_cart(user_id, lang))
                     continue
-                    
-                if tl in ['c','confirmar','confirm']:
-                    total = sum(i['price'] for i in carts.get(user_id, []))
-                    if total <= 0: await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
+                                 # ... (dentro de process_message, después de detectar 'hola' y 'menu')
+                
+                if tl in ['c', 'confirmar', 'confirm']:
+                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id]) <= 0:
+                        await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
                     else:
                         pedido_estado[user_id] = {"fase": "entrega"}
-                        await send_message(user_id, "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio")
-                    continue
-                    
+                        await send_message(user_id, get_text(lang, 'delivery_type'))
+                    continue   
                 if tl.isdigit():
                     await send_message(user_id, await add_to_cart(user_id, int(tl), 1, client_id, lang))
                     continue
