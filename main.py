@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 from supabase import create_client, Client
 from typing import Dict, List, Optional
 
-VERSION = "8.6-PROD"
+VERSION = "8.6-FINAL"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("isa-bot")
 
@@ -36,15 +36,16 @@ if LANG_DIR.exists():
             with open(f, "r", encoding="utf-8") as fh:
                 LANGUAGES[f.stem] = json.load(fh)
         except Exception as e:
-            logger.error(f"❌ Error cargando idioma {f}: {e}")
+            logger.error(f"❌ Error cargando {f}: {e}")
 else: LANG_DIR.mkdir(exist_ok=True)
 
 LANG_MAP = {'english':'en','spanish':'es','french':'fr','german':'de','turkish':'tr','darija_latin':'dar','darija_arabic':'ar'}
 
 def get_text(lang_code: str, key: str, **kwargs) -> str:
     file_key = LANG_MAP.get(lang_code, 'es')
-    texts = LANGUAGES.get(file_key, LANGUAGES.get('es', {}))
-    template = texts.get(key, key)
+    es_texts = LANGUAGES.get('es', {})
+    texts = LANGUAGES.get(file_key, es_texts)
+    template = texts.get(key, es_texts.get(key, key))
     if kwargs:
         try: return template.format(**kwargs)
         except: return template
@@ -55,22 +56,29 @@ carts: Dict[str, List[dict]] = {}
 user_lang: Dict[str, str] = {}
 pedido_estado: Dict[str, dict] = {}
 restaurant_status = "normal"
+clientes_validados: set = set()
 TIEMPOS = {"normal":{"recoger":"5-10 min","domicilio":"20-30 min"},"moderado":{"recoger":"10-15 min","domicilio":"25-35 min"},"lleno":{"recoger":"20-30 min","domicilio":"35-45 min"}}
-phone_to_restaurant: Dict[str, str] = {'212626282904': 'rest_id_1', '212668087490': 'rest_id_1', '5217225529803': 'rest_id_1'}
+phone_to_restaurant: Dict[str, str] = {
+    '212626282904': '44444444-4444-4444-4444-444444444444',
+    '212668087490': '44444444-4444-4444-4444-444444444444',
+    '5217225529803': '44444444-4444-4444-4444-444444444444'
+}
 
 # ========== DETECTOR IDIOMA ==========
 class LanguageDetector:
-    KEYWORDS = {'english':['hello','hi','menu','thank'],'spanish':['hola','menu','gracias','quiero'],'french':['bonjour','menu','merci'],'darija_latin':['salam','menu','bghit'],'darija_arabic':['سلام','بغيت']}
+    KEYWORDS = {'english':['hello','hi','menu','thank'],'spanish':['hola','menu','gracias','quiero'],'french':['bonjour','menu','merci'],'german':['hallo','menü','danke'],'turkish':['merhaba','menü'],'darija_latin':['salam','menu','bghit'],'darija_arabic':['سلام','قائمة','بغيت']}
     @classmethod
     def detect(cls, text: str) -> str:
         t = text.lower().strip()
         if any('\u0600'<=c<='\u06FF' for c in text): return 'darija_arabic'
         scores = {l:sum(1 for k in kw if k in t) for l,kw in cls.KEYWORDS.items()}
         return max(scores, key=scores.get) if max(scores.values()) > 0 else 'spanish'
+    @classmethod
+    def get_help(cls, lang:str) -> str: return get_text(lang,'help')
 
 # ========== MENÚ & CARRITO ==========
-async def get_restaurant_menu(client_id: str, lang: str = 'spanish') -> tuple:
-    if not supabase: return "❌ DB offline", []
+async def get_restaurant_menu(client_id: str, lang: str = 'spanish', waba: bool = True) -> tuple:
+    if not supabase: return "❌ Error de conexión", []
     try:
         lang_key = LANG_MAP.get(lang, 'es')
         res = supabase.table("menu_items").select("*").eq("client_id", client_id).eq("is_available", True).execute()
@@ -79,8 +87,11 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish') -> tuple:
         for i, item in enumerate(res.data, 1):
             trad = item.get("translations", {}) or {}
             nombre = trad.get(lang_key) or trad.get('es') or item.get("dish_name", "Plato")
+            desc = trad.get(f"desc_{lang_key}") or item.get("description", "")
             p = "🆓 GRATIS con bebida" if item.get("price",0)==0 else f"{item['price']} MAD"
             lines.append(f"{i}. *{nombre}* — {p}")
+            if desc: lines.append(f"   {desc}")
+            lines.append("")
         txt = "\n".join(lines)
         if len(txt) > 1500:
             mid = txt[:1500].rfind("\n")
@@ -89,6 +100,16 @@ async def get_restaurant_menu(client_id: str, lang: str = 'spanish') -> tuple:
     except Exception as e:
         logger.error(f"Error menú: {e}")
         return "❌ Error cargando menú", [], ""
+
+async def add_to_cart(user_id: str, idx: int, cant: int, client_id: str, lang: str) -> str:
+    _, platos, _ = await get_restaurant_menu(client_id, lang, waba=True)
+    if not platos or idx < 1 or idx > len(platos): return f"❌ Número inválido. El menú tiene {len(platos)} platos."
+    sel = platos[idx-1]
+    if user_id not in carts: carts[user_id] = []
+    if sel["price"]==0 and not any(i["price"]>0 for i in carts.get(user_id,[])): return f"📌 *{sel['dish_name']}* es GRATIS con bebida u otro producto."
+    for _ in range(cant): carts[user_id].append({"name":sel["dish_name"],"price":sel["price"]})
+    total = sum(i["price"] for i in carts[user_id])
+    return get_text(lang, 'added_to_cart', cantidad=cant, nombre=sel['dish_name'], total=total)
 
 async def get_cart(user_id: str, lang: str) -> str:
     if user_id not in carts or not carts[user_id]: return "🛒 Tu carrito está vacío. Escribe *m* para ver el menú."
@@ -103,24 +124,20 @@ async def get_cart(user_id: str, lang: str) -> str:
 # ========== GUARDAR PEDIDO (FIX BD REAL) ==========
 async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direccion: str, metodo: str) -> dict:
     try:
-        if not supabase: return {"error": "DB offline"}
-        data = {
-            "client_id": phone_to_restaurant.get(user_id, "rest_id_1"),
-            "customer_phone": user_id,
-            "items": json.dumps(items),
-            "total_amount": total,
-            "status": "pending",
-            "delivery_type": tipo,
-            "address": direccion,
-            "payment_method": metodo,
-            "created_at": datetime.now().isoformat()
-        }
-        # ✅ Usa la tabla REAL 'orders' y la columna REAL 'created_at'
-         res = supabase.table("orders").select("*").eq("customer_phone", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
-        return {"numero": f"ORD-{res.data[0]['id'][-6:].upper()}" if res.data else "TEMP"}
+        if not supabase: return {"error": "DB offline", "numero": "TEMP"}
+        client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
+        # ✅ Usa la tabla REAL 'orders' y columna 'created_at'
+        data = {"client_id": client_id, "customer_phone": user_id, "items": items, "total_amount": total, 
+                "status": "pending", "delivery_type": tipo, "address": direccion, "payment_method": metodo, 
+                "created_at": datetime.now().isoformat()}
+        res = supabase.table("orders").insert(data).execute()
+        if res.data:
+            num = res.data[0].get("id", "")[-6:].upper()
+            return {"numero": f"ORD-{num}", "id": res.data[0].get("id")}
+        return {"error": "Failed", "numero": "???"}
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
-        return {"error": str(e)}
+        return {"error": str(e), "numero": "???"}
 
 # ========== WHATSAPP ==========
 async def send_message(to: str, message: str) -> bool:
@@ -134,14 +151,15 @@ async def send_message(to: str, message: str) -> bool:
             return r.status_code == 200
     except: return False
 
-# ========== PROCESAR MENSAJE (v8.6 LIMPIO) ==========
+# ========== PROCESAR MENSAJE (v8.6 ESTABLE) ==========
 async def process_message(body: dict):
     if body.get("object") != "whatsapp_business_account": return
     for entry in body.get("entry", []):
         for change in entry.get("changes", []):
             val = change.get("value", {})
             meta = val.get("metadata", {})
-            client_id = phone_to_restaurant.get(meta.get("display_phone_number","").replace("+",""), "rest_id_1")
+            phone = meta.get("display_phone_number", "").replace("+","")
+            client_id = phone_to_restaurant.get(phone, "44444444-4444-4444-4444-444444444444")
             for msg in val.get("messages", []):
                 if msg.get("type") != "text": continue
                 user_id = msg.get("from")
@@ -152,27 +170,20 @@ async def process_message(body: dict):
                 lang = user_lang.get(user_id, LanguageDetector.detect(txt))
                 fase = pedido_estado.get(user_id, {}).get("fase", "inicio")
 
-                # 2️⃣ COMANDOS GLOBALES
-                if tl in ['q', 'salir', 'reiniciar']:
-                    if user_id in carts: del carts[user_id]
-                    if user_id in pedido_estado: del pedido_estado[user_id]
-                    pedido_estado[user_id] = {"fase": "seleccion_idioma"}
+                # 2️⃣ COMANDO Q (Reiniciar)
+                if tl in ['q', 'salir', 'exit', 'reiniciar']:
+                    carts[user_id] = []
+                    pedido_estado.pop(user_id, None)
                     await send_message(user_id, "🌍 *Selecciona tu idioma:*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija")
+                    pedido_estado[user_id] = {"fase": "seleccion_idioma"}
                     continue
 
                 # 3️⃣ VALIDACIONES DE FASE
-                if fase == "seleccion_idioma":
-                    if txt in {'1','2','3','4'}:
-                        mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin'}
-                        user_lang[user_id] = mapas[txt]
-                        await send_message(user_id, f"👋 ¡Hola! Bienvenido.\n{get_text(user_lang[user_id], 'help')}")
-                        pedido_estado.pop(user_id, None)
-                    else: await send_message(user_id, "❌ Responde 1-4.")
-                    continue
                 if fase in ["entrega","check_zona","direccion","pago","cash_bill"]:
                     if fase == "entrega":
                         if tl == '1': pedido_estado[user_id].update({"tipo": "recoger", "fase": "pago"}); await send_message(user_id, f"✅ *Recoger*\n{get_text(lang, 'payment_method')}")
                         elif tl == '2': pedido_estado[user_id].update({"tipo": "domicilio", "fase": "check_zona"}); await send_message(user_id, "📍 ¿Zona de reparto? (Sí/No)")
+                        else: await send_message(user_id, "❌ Responde *1* o *2*."); continue
                     elif fase == "check_zona":
                         if tl in ['si','sí','yes']: pedido_estado[user_id]["fase"] = "direccion"; await send_message(user_id, "📍 Dirección exacta:")
                         else: pedido_estado[user_id].update({"tipo": "recoger", "fase": "pago"}); await send_message(user_id, f"⚠️ Cambiado a recoger.\n{get_text(lang, 'payment_method')}")
@@ -186,24 +197,33 @@ async def process_message(body: dict):
                             carts[user_id] = []; pedido_estado.pop(user_id, None)
                             await send_message(user_id, f"✅ Pedido {res.get('numero','?')} confirmado (Tarjeta).")
                         elif tl == '3': await send_message(user_id, "💳 Transferencia no disponible por ahora.")
+                        else: await send_message(user_id, "❌ Elige *1*, *2* o *3*."); continue
                     elif fase == "cash_bill":
                         await send_message(user_id, f"✅ Pago en efectivo registrado ({txt}). Pedido en camino.")
                         carts[user_id] = []; pedido_estado.pop(user_id, None)
                     continue
 
-                # 4️⃣ COMANDOS PRINCIPALES
-                                # 5️⃣ COMANDOS
+                # 4️⃣ FASE INICIAL / IDIOMAS
+                if fase == "seleccion_idioma":
+                    mapas = {'1':'spanish','2':'english','3':'french','4':'darija_latin'}
+                    if txt in mapas:
+                        user_lang[user_id] = mapas[txt]
+                        await send_message(user_id, f"👋 ¡Hola! Bienvenido.\n{LanguageDetector.get_help(user_lang[user_id])}")
+                        pedido_estado.pop(user_id, None)
+                    else: await send_message(user_id, "❌ Responde *1*, *2*, *3* o *4*.")
+                    continue
+
+                # 5️⃣ COMANDOS PRINCIPALES
                 if tl in ['hola','hello','salam','hi']:
                     carts[user_id] = []; pedido_estado.pop(user_id, None)
-                    await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
+                    await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija")
                     pedido_estado[user_id] = {"fase":"seleccion_idioma"}
                     continue
                     
-                if tl in ['m','menu','menú']:
-                    msg1, _, msg2 = await get_restaurant_menu(client_id, lang, waba=True)
+                if tl in ['m','menu']:
+                    msg1, _, msg2 = await get_restaurant_menu(client_id, lang)
                     await send_message(user_id, msg1)
                     if msg2: await send_message(user_id, msg2)
-                    await enviar_menu_pdf(user_id, lang)
                     continue
                     
                 if tl in ['v','pedido','order','cart']:
@@ -211,28 +231,19 @@ async def process_message(body: dict):
                     continue
                     
                 if tl in ['c','confirmar','confirm']:
-                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id]) <= 0:
-                        await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
+                    total = sum(i['price'] for i in carts.get(user_id, []))
+                    if total <= 0: await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
                     else:
                         pedido_estado[user_id] = {"fase": "entrega"}
-                        await send_message(user_id, get_text(lang, 'delivery_type'))
-                    continue
-                    
-                if tl in ['r','reservar','reservación']:
-                    pedido_estado[user_id] = {"fase": "reserva_personas"}
-                    await send_message(user_id, "📅 *Reservar mesa*\n¿Para cuántas personas? (1-20)")
+                        await send_message(user_id, "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio")
                     continue
                     
                 if tl.isdigit():
                     await send_message(user_id, await add_to_cart(user_id, int(tl), 1, client_id, lang))
                     continue
                     
-                if tl.startswith('x'):
-                    resto = tl[1:].strip()
-                    await send_message(user_id, await remove_from_cart_by_index(user_id, int(resto), lang) if resto.isdigit() else await clear_cart(user_id, lang))
-                    continue
-                    
-                await send_message(user_id, LanguageDetector.get_help(lang))
+                await send_message(user_id, "❓ Escribe *ayuda* o *menu*.")
+
 # ========== ENDPOINTS ==========
 @app.get("/health")
 async def health(): return {"status":"ok","version":VERSION}
@@ -246,8 +257,6 @@ async def wb_post(req: Request, bg: BackgroundTasks):
     try: bg.add_task(process_message, await req.json()); return {"status":"ok"}
     except: return {"status":"error"}, 500
 
-@app.on_event("startup")
-async def startup(): logger.info("[STARTUP] Bot listo.")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
