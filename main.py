@@ -146,7 +146,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
         if not supabase: return {"error": "DB offline", "numero": "TEMP"}
         client_id = phone_to_restaurant.get(user_id, "44444444-4444-4444-4444-444444444444")
         data = {"client_id": client_id, "customer_phone": user_id, "items": items, "total_amount": total, "status": "nuevo", "delivery_type": tipo, "address": direccion, "payment_method": metodo, "created_at": datetime.now().isoformat()}
-        res = supabase.table("orders").insert(data).execute()
+        res = supabase.table("orders").select("*").eq("customer_phone", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
         if res.data:
             num = res.data[0].get("id", "")[-6:].upper()
             return {"numero": f"ORD-{num}", "id": res.data[0].get("id")}
