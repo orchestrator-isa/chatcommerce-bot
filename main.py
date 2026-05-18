@@ -260,11 +260,11 @@ async def process_message(body: dict):
                     continue
                 if tl in ['v','pedido','order','cart']: await send_message(user_id, await get_cart(user_id, lang)); continue
                 if tl in ['c','confirmar','confirm']:
-                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0: await send_message(user_id, "⚠️ Carrito vacío.")
-                    else:
-                        pedido_estado[user_id] = {"fase": "entrega"}
-                        await send_message(user_id, get_text(lang, 'delivery_type'))
-                    continue
+                if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0: 
+                    await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
+                else: 
+                    await send_message(user_id, await iniciar_entrega(user_id, lang))
+                continue 
                 if tl in ['r','reservar']:
                     await send_message(user_id, "📅 *Reserva*\nEscribe: `Hoy 21:00` o `18/05 20:30`")
                     continue
