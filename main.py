@@ -116,7 +116,7 @@ async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direc
             "created_at": datetime.now().isoformat()
         }
         # ✅ Usa la tabla REAL 'orders' y la columna REAL 'created_at'
-        res = supabase.table("orders").insert(data).execute()
+         res = supabase.table("orders").select("*").eq("customer_phone", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
         return {"numero": f"ORD-{res.data[0]['id'][-6:].upper()}" if res.data else "TEMP"}
     except Exception as e:
         logger.error(f"❌ Error guardar_pedido: {e}")
@@ -192,39 +192,47 @@ async def process_message(body: dict):
                     continue
 
                 # 4️⃣ COMANDOS PRINCIPALES
+                                # 5️⃣ COMANDOS
                 if tl in ['hola','hello','salam','hi']:
-                    if user_id in carts: del carts[user_id]
-                    if user_id in pedido_estado: del pedido_estado[user_id]
-                    await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija")
+                    carts[user_id] = []; pedido_estado.pop(user_id, None)
+                    await send_message(user_id, "🌍 *Bienvenido*\n1. 🇪🇸 Español 2. 🇬🇧 English 3. 🇫🇷 Français 4. 🇲🇦 Darija 5. 🇲🇦 العربية")
                     pedido_estado[user_id] = {"fase":"seleccion_idioma"}
                     continue
-                if tl in ['m','menu']:
-                    msg1, _, msg2 = await get_restaurant_menu(client_id, lang)
+                    
+                if tl in ['m','menu','menú']:
+                    msg1, _, msg2 = await get_restaurant_menu(client_id, lang, waba=True)
                     await send_message(user_id, msg1)
                     if msg2: await send_message(user_id, msg2)
+                    await enviar_menu_pdf(user_id, lang)
                     continue
+                    
                 if tl in ['v','pedido','order','cart']:
                     await send_message(user_id, await get_cart(user_id, lang))
                     continue
+                    
                 if tl in ['c','confirmar','confirm']:
-                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id])<=0:
+                    if not carts.get(user_id) or sum(i['price'] for i in carts[user_id]) <= 0:
                         await send_message(user_id, "⚠️ Carrito vacío. Escribe *m* para ver menú.")
                     else:
                         pedido_estado[user_id] = {"fase": "entrega"}
-                        await send_message(user_id, "🚚 *Tipo de entrega*\n1. Recoger en local\n2. Domicilio")
+                        await send_message(user_id, get_text(lang, 'delivery_type'))
                     continue
+                    
+                if tl in ['r','reservar','reservación']:
+                    pedido_estado[user_id] = {"fase": "reserva_personas"}
+                    await send_message(user_id, "📅 *Reservar mesa*\n¿Para cuántas personas? (1-20)")
+                    continue
+                    
                 if tl.isdigit():
-                    _, platos, _ = await get_restaurant_menu(client_id, lang)
-                    idx = int(tl)
-                    if 1 <= idx <= len(platos):
-                        if user_id not in carts: carts[user_id] = []
-                        carts[user_id].append({"name": platos[idx-1]["dish_name"], "price": platos[idx-1]["price"]})
-                        total = sum(i["price"] for i in carts[user_id])
-                        await send_message(user_id, f"✅ Añadido. Total: {total} MAD. Escribe *pedido* o *c*.")
-                    else: await send_message(user_id, "❌ Número inválido.")
+                    await send_message(user_id, await add_to_cart(user_id, int(tl), 1, client_id, lang))
                     continue
-                await send_message(user_id, "❓ Escribe *ayuda* o *menu*.")
-
+                    
+                if tl.startswith('x'):
+                    resto = tl[1:].strip()
+                    await send_message(user_id, await remove_from_cart_by_index(user_id, int(resto), lang) if resto.isdigit() else await clear_cart(user_id, lang))
+                    continue
+                    
+                await send_message(user_id, LanguageDetector.get_help(lang))
 # ========== ENDPOINTS ==========
 @app.get("/health")
 async def health(): return {"status":"ok","version":VERSION}
