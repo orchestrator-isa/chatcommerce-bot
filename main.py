@@ -119,7 +119,8 @@ async def get_cart(user_id: str, lang: str) -> str:
         items[i["name"]]["cant"] += 1
     total = sum(i["price"] for i in carts[user_id])
     lineas = [f"• {n} x{d['cant']} — {d['cant']*d['price']} MAD" if d["price"]>0 else f"• {n} — 🆓" for n,d in items.items()]
-    return f"🛒 *TU PEDIDO*\n{'\n'.join(lineas)}\n💰 *TOTAL: {total} MAD*\nEscribe *c* para confirmar."
+    items_str = "\n".join(lineas)
+    return f"🛒 *TU PEDIDO*\n{items_str}\n💰 *TOTAL: {total} MAD*\nEscribe *c* para confirmar."
 
 # ========== GUARDAR PEDIDO (FIX BD REAL) ==========
 async def guardar_pedido(user_id: str, items: list, total: int, tipo: str, direccion: str, metodo: str) -> dict:
