@@ -1,23 +1,14 @@
 """
 Orquestrator ISA v2.3.0-MVP-PANEL-FIXED
 Arquitectura: FastAPI + SQLAlchemy 2.0 Async + PostgreSQL + WhatsApp Cloud API
-┌─────────────┐      HTTPS/JSON       ┌──────────────────────────────┐      asyncpg      ┌──────────────────┐
-│   CLIENTE   │ ─────────────────────▶ │   RENDER (FastAPI + Panel)   │ ────────────────▶ │   SUPABASE       │
-│  (WhatsApp) │ ◀──────────────────── │   main.py v2.3               │ ◀──────────────── │   PostgreSQL     │
-└─────────────┘      WhatsApp API      └──────────┬───────────────────┘                 └──────────────────┘
-                                                  │
-                                          ┌───────┴───────────┐
-                                          │  🔄 WhatsApp Cloud│
-                                          │  API (Meta)       │
-                                          └───────────────────┘
 """
 import os
 import uuid
 import json
-import time as time_module
+import time as time_module          # módulo del sistema para time.time()
 import httpx
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time as datetime_time   # datetime_time es el tipo
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
@@ -35,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 from pydantic import BaseModel, Field, ConfigDict
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN Y LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,31 +69,31 @@ class EstadoReserva(str, Enum):
     no_show = "no_show"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MODELOS SQLALCHEMY 2.0
+# MODELOS SQLALCHEMY 2.0 (TODOS CON mapped_column)
 # ─────────────────────────────────────────────────────────────────────────────
 class Language(Base):
     __tablename__ = "languages"
     code: Mapped[str] = mapped_column(String, primary_key=True)
-    name: Mapped[str]
-    name_native: Mapped[Optional[str]]
+    name: Mapped[str] = mapped_column(String)
+    name_native: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     is_rtl: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class Currency(Base):
     __tablename__ = "currencies"
     code: Mapped[str] = mapped_column(String, primary_key=True)
-    name: Mapped[str]
-    symbol: Mapped[str]
+    name: Mapped[str] = mapped_column(String)
+    symbol: Mapped[str] = mapped_column(String)
     decimals: Mapped[int] = mapped_column(Integer, default=2)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class Restaurante(Base):
     __tablename__ = "restaurantes"
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    nombre: Mapped[str]
-    telefono: Mapped[Optional[str]]
-    direccion: Mapped[Optional[str]]
-    ciudad: Mapped[Optional[str]]
+    nombre: Mapped[str] = mapped_column(String)
+    telefono: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    direccion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ciudad: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     pais: Mapped[str] = mapped_column(String, default="Marruecos")
     currency_code: Mapped[str] = mapped_column(String)
     default_language: Mapped[str] = mapped_column(String, default="es")
@@ -115,7 +107,7 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
     id_api_key: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     api_key: Mapped[str] = mapped_column(String, unique=True)
-    descripcion: Mapped[Optional[str]]
+    descripcion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -131,8 +123,8 @@ class RestauranteConfig(Base):
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     welcome_message: Mapped[str] = mapped_column(Text, default="¡Bienvenido!")
     menu_auto_send: Mapped[bool] = mapped_column(Boolean, default=True)
-    horario_apertura: Mapped[Optional[datetime.time]]
-    horario_cierre: Mapped[Optional[datetime.time]]
+    horario_apertura: Mapped[Optional[datetime_time]] = mapped_column(Time, nullable=True)
+    horario_cierre: Mapped[Optional[datetime_time]] = mapped_column(Time, nullable=True)
     dias_abierto: Mapped[list] = mapped_column(JSON, default=list)
     tax_rate: Mapped[Decimal] = mapped_column(DECIMAL(5,2), default=0.00)
     delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -153,20 +145,20 @@ class Cliente(Base):
     id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     wa_id: Mapped[str] = mapped_column(String)
-    nombre: Mapped[Optional[str]]
-    telefono: Mapped[str]
+    nombre: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    telefono: Mapped[str] = mapped_column(String)
     language_pref: Mapped[str] = mapped_column(String, default="es")
     total_pedidos: Mapped[int] = mapped_column(Integer, default=0)
     total_gastado: Mapped[Decimal] = mapped_column(DECIMAL(10,2), default=0.00)
-    last_visit_at: Mapped[Optional[datetime]]
+    last_visit_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 class Menu(Base):
     __tablename__ = "menus"
     id_menu: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    nombre: Mapped[str]
-    descripcion: Mapped[Optional[str]]
+    nombre: Mapped[str] = mapped_column(String)
+    descripcion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
     orden: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -174,27 +166,27 @@ class Plato(Base):
     __tablename__ = "platos"
     id_plato: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_menu: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    nombre: Mapped[str]
-    descripcion: Mapped[Optional[str]]
+    nombre: Mapped[str] = mapped_column(String)
+    descripcion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     precio: Mapped[Decimal] = mapped_column(DECIMAL(10,2))
-    categoria: Mapped[Optional[str]]
+    categoria: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     disponible: Mapped[bool] = mapped_column(Boolean, default=True)
     destacado: Mapped[bool] = mapped_column(Boolean, default=False)
-    prep_time_min: Mapped[Optional[int]]
+    prep_time_min: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     orden: Mapped[int] = mapped_column(Integer, default=0)
 
 class PlatoTraduccion(Base):
     __tablename__ = "plato_traducciones"
     id_plato: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     codigo_idioma: Mapped[str] = mapped_column(String, primary_key=True)
-    nombre: Mapped[str]
-    descripcion: Mapped[Optional[str]]
+    nombre: Mapped[str] = mapped_column(String)
+    descripcion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 class PlatoOpcion(Base):
     __tablename__ = "plato_opciones"
     id_opcion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_plato: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    nombre: Mapped[str]
+    nombre: Mapped[str] = mapped_column(String)
     requerido: Mapped[bool] = mapped_column(Boolean, default=False)
     multiple: Mapped[bool] = mapped_column(Boolean, default=False)
     opciones: Mapped[list] = mapped_column(JSONB, default=list)
@@ -214,17 +206,17 @@ class Mensaje(Base):
     id_conversacion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     direccion: Mapped[str] = mapped_column(String)
     tipo: Mapped[str] = mapped_column(String, default="texto")
-    contenido: Mapped[Optional[str]]
-    ai_intent: Mapped[Optional[str]]
-    ai_confidence: Mapped[Optional[Decimal]]
-    ai_model: Mapped[Optional[str]]
+    contenido: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ai_intent: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ai_confidence: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(3,2), nullable=True)
+    ai_model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 class Pedido(Base):
     __tablename__ = "pedidos"
     id_pedido: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    id_conversacion: Mapped[Optional[uuid.UUID]]
+    id_conversacion: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     estado: Mapped[EstadoPedido] = mapped_column(SAEnum(EstadoPedido, name="estado_pedido", create_type=False), default=EstadoPedido.pendiente)
     items: Mapped[list] = mapped_column(JSONB, default=list)
     subtotal: Mapped[Decimal] = mapped_column(DECIMAL(10,2), default=0.00)
@@ -233,60 +225,64 @@ class Pedido(Base):
     total: Mapped[Decimal] = mapped_column(DECIMAL(10,2))
     metodo_pago: Mapped[str] = mapped_column(String, default="efectivo")
     delivery_type: Mapped[str] = mapped_column(String, default="pickup")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)  # <-- añadido
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class PedidoHistorial(Base):
     __tablename__ = "pedido_historial"
     id_historial: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_pedido: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    estado_anterior: Mapped[Optional[str]]
-    estado_nuevo: Mapped[str]
-    cambiado_por: Mapped[Optional[str]]
-    notas: Mapped[Optional[str]]
+    estado_anterior: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    estado_nuevo: Mapped[str] = mapped_column(String)
+    cambiado_por: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    notas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 class Reservacion(Base):
     __tablename__ = "reservaciones"
     id_reserva: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    id_conversacion: Mapped[Optional[uuid.UUID]]
+    id_conversacion: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     codigo_reserva: Mapped[str] = mapped_column(String, unique=True)
     estado: Mapped[EstadoReserva] = mapped_column(SAEnum(EstadoReserva, name="estado_reserva", create_type=False), default=EstadoReserva.pendiente)
-    fecha_reserva: Mapped[date]
-    hora_reserva: Mapped[datetime.time]
-    num_personas: Mapped[int]
-    mesa_asignada: Mapped[Optional[str]]
-    zona: Mapped[Optional[str]]
+    fecha_reserva: Mapped[date] = mapped_column(Date)
+    hora_reserva: Mapped[datetime_time] = mapped_column(Time, nullable=False)
+    num_personas: Mapped[int] = mapped_column(Integer)
+    mesa_asignada: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    zona: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     ai_confirmada: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class ReservaHistorial(Base):
     __tablename__ = "reserva_historial"
     id_historial: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_reserva: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    estado_anterior: Mapped[Optional[str]]
-    estado_nuevo: Mapped[str]
-    cambiado_por: Mapped[Optional[str]]
-    notas: Mapped[Optional[str]]
+    estado_anterior: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    estado_nuevo: Mapped[str] = mapped_column(String)
+    cambiado_por: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    notas: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 class Suscripcion(Base):
     __tablename__ = "suscripciones"
     id_suscripcion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    plan: Mapped[str]
+    plan: Mapped[str] = mapped_column(String)
     precio_mensual: Mapped[Decimal] = mapped_column(DECIMAL(10,2))
-    currency_code: Mapped[str]
-    estado: Mapped[str]
+    currency_code: Mapped[str] = mapped_column(String)
+    estado: Mapped[str] = mapped_column(String)
 
 class Factura(Base):
     __tablename__ = "facturas"
     id_factura: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_suscripcion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    periodo_inicio: Mapped[date]
-    periodo_fin: Mapped[date]
+    periodo_inicio: Mapped[date] = mapped_column(Date)
+    periodo_fin: Mapped[date] = mapped_column(Date)
     monto: Mapped[Decimal] = mapped_column(DECIMAL(10,2))
-    estado_pago: Mapped[str]
+    estado_pago: Mapped[str] = mapped_column(String)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS
+# PYDANTIC SCHEMAS (sin Mapped, sin mapped_column)
 # ─────────────────────────────────────────────────────────────────────────────
 class RestauranteCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -306,7 +302,7 @@ class PedidoCreate(BaseModel):
 class ReservaCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     fecha_reserva: date
-    hora_reserva: datetime.time  
+    hora_reserva: datetime_time      # usa el tipo datetime_time (definido arriba)
     num_personas: int = Field(gt=0)
     mesa_asignada: Optional[str] = None
     zona: Optional[str] = None
@@ -331,13 +327,13 @@ async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), d
         raise HTTPException(status_code=403, detail="API Key inválida o restaurante inactivo")
     return rest
 
-# Rate limiting en memoria
+# Rate limiting
 RATE_LIMIT_DB: Dict[str, List[float]] = defaultdict(list)
 RATE_LIMIT_MAX = 100
 RATE_LIMIT_WINDOW = 60
 
 def check_rate_limit(client_ip: str) -> bool:
-    now = time_module.time()   # <-- uso del módulo del sistema
+    now = time_module.time()
     RATE_LIMIT_DB[client_ip] = [t for t in RATE_LIMIT_DB[client_ip] if t > now - RATE_LIMIT_WINDOW]
     if len(RATE_LIMIT_DB[client_ip]) >= RATE_LIMIT_MAX:
         return False
@@ -368,10 +364,10 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
 @app.on_event("startup")
 async def startup():
     # await seed_database_once()
-    pass 
+    pass
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SEED DATA (solo la primera vez) - No usado actualmente
+# SEED DATA (no usado)
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_database_once():
     async with async_session_maker() as db:
@@ -379,22 +375,20 @@ async def seed_database_once():
         if res.scalar_one_or_none():
             logger.info("Base de datos ya poblada. Seed omitido.")
             return
-
         logger.info("🌱 Ejecutando seed básico...")
         r1 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Restinga", telefono="+212668087490", ciudad="Tetuan", currency_code="MAD")
         r2 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Cafe Al Hizam", telefono="+212600000000", ciudad="Marrakech", currency_code="MAD")
         db.add_all([r1, r2])
         await db.commit()
-
         db.add_all([
             RestauranteConfig(id_restaurante=r1.id_restaurante, welcome_message="Marhaba bi Restinga!", tax_rate=0.10, reservation_enabled=True),
             RestauranteConfig(id_restaurante=r2.id_restaurante, welcome_message="Bienvenido a Al Hizam", tax_rate=0.10, reservation_enabled=True)
         ])
         await db.commit()
-        logger.info("Seed básico completado. Las API keys deben insertarse manualmente en la base de datos.")
+        logger.info("Seed básico completado. Las API keys deben insertarse manualmente.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WEBHOOK Y BOT
+# WEBHOOK Y BOT (igual que antes)
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/whatsapp/webhook")
 def webhook_verify(request: Request):
@@ -423,18 +417,16 @@ async def process_inbound_message(payload: dict):
             return
 
         wa_id = msg_data["from"]
-        text = msg_data["text"]["body"].lower().strip()
+        text_body = msg_data["text"]["body"].lower().strip()
 
         async with async_session_maker() as db:
-            # Obtener el primer restaurante activo como tenant por defecto
             result = await db.execute(select(Restaurante).where(Restaurante.activo == True).limit(1))
             rest = result.scalar_one_or_none()
             if not rest:
-                logger.error("No hay restaurantes activos para procesar mensajes")
+                logger.error("No hay restaurantes activos")
                 return
             rest_id = rest.id_restaurante
 
-            # Cliente
             res = await db.execute(select(Cliente).where(Cliente.wa_id == wa_id))
             cliente = res.scalar_one_or_none()
             if not cliente:
@@ -453,14 +445,14 @@ async def process_inbound_message(payload: dict):
             draft = ctx.get("order_draft", [])
 
             reply = ""
-            if text in ["m", "menu", "0"]:
+            if text_body in ["m", "menu", "0"]:
                 reply = "📋 *Menú Restinga*\n1. Tajín Pollo - 70\n2. Cuscús - 80\nResponde con el número para añadir."
-            elif text in ["v", "pedido", "carrito"]:
+            elif text_body in ["v", "pedido", "carrito"]:
                 if draft:
                     reply = "🛒 *Tu Carrito*\n" + "\n".join([f"- {i.get('nombre')}: {i.get('precio')} MAD" for i in draft])
                 else:
                     reply = "El carrito está vacío. Escribe 'menu'."
-            elif text in ["c", "confirm"]:
+            elif text_body in ["c", "confirm"]:
                 if draft:
                     total = sum(i["precio"] for i in draft)
                     nuevo_pedido = Pedido(
@@ -473,9 +465,9 @@ async def process_inbound_message(payload: dict):
                     reply = "✅ Pedido confirmado. Tiempo estimado: 30 min."
                 else:
                     reply = "No hay items en el carrito."
-            elif text.startswith("x "):
+            elif text_body.startswith("x "):
                 try:
-                    idx = int(text.split()[1]) - 1
+                    idx = int(text_body.split()[1]) - 1
                     if 0 <= idx < len(draft):
                         draft.pop(idx)
                         ctx["order_draft"] = draft
@@ -485,9 +477,9 @@ async def process_inbound_message(payload: dict):
                         reply = "Índice inválido."
                 except:
                     reply = "Uso: x 1"
-            elif text.isdigit() and int(text) > 0:
+            elif text_body.isdigit() and int(text_body) > 0:
                 platos = [{"nombre": "Tajín Pollo", "precio": 70}, {"nombre": "Cuscús", "precio": 80}]
-                idx = int(text) - 1
+                idx = int(text_body) - 1
                 if idx < len(platos):
                     draft.append(platos[idx])
                     ctx["order_draft"] = draft
@@ -495,17 +487,16 @@ async def process_inbound_message(payload: dict):
                     reply = f"✅ {platos[idx]['nombre']} añadido."
                 else:
                     reply = "Plato no encontrado."
-            elif text in ["q", "salir"]:
+            elif text_body in ["q", "salir"]:
                 ctx["order_draft"] = []
                 conv.contexto_bot = ctx
                 reply = "🔄 Sesión reiniciada."
             else:
                 reply = "No entendí. Usa 'menu', 'v', 'c', 'x 1', o un número."
 
-            msg = Mensaje(id_conversacion=conv.id_conversacion, direccion="inbound", contenido=text)
+            msg = Mensaje(id_conversacion=conv.id_conversacion, direccion="inbound", contenido=text_body)
             db.add(msg)
             await db.commit()
-
             await send_wa_message(wa_id, reply)
     except Exception as e:
         logger.error(f"Bot process failed: {e}")
@@ -623,7 +614,7 @@ async def dashboard_hoy(db: AsyncSession = Depends(get_db), rest: Restaurante = 
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PANEL HTML
+# PANEL HTML (igual)
 # ─────────────────────────────────────────────────────────────────────────────
 HTML_LOGIN = """
 <form action="/panel/login" method="post" class="bg-white p-6 rounded shadow max-w-sm mx-auto mt-20">
@@ -659,7 +650,7 @@ const refresh = async () => {
   const p = await fetch('/api/v1/pedidos/activos').then(x=>x.json());
   document.getElementById('r-count').textContent = r.length;
   document.getElementById('p-count').textContent = p.length;
-  document.getElementById('r-body').innerHTML = r.map(x => `<tr class="border-t"><td class="p-2">${x.codigo_reserva}</td><td>${x.num_personas}<tr><td>${x.hora_reserva}</td><td>${x.estado}</tr>`).join('');
+  document.getElementById('r-body').innerHTML = r.map(x => `<tr class="border-t"><td class="p-2">${x.codigo_reserva}</td><td>${x.num_personas}</tr><td>${x.hora_reserva}</td><td>${x.estado}</td></tr>`).join('');
   document.getElementById('p-body').innerHTML = p.map(x => `<tr class="border-t"><td class="p-2">${x.id_pedido.slice(0,8)}</td><td>${x.total} MAD</td><td>${x.estado}</td></tr>`).join('');
 };
 setInterval(refresh, 30000); refresh();
