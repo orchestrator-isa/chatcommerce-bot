@@ -515,16 +515,13 @@ def health():
     return {"status": "ok", "version": "2.3.0-MVP", "ts": datetime.utcnow().isoformat()}
 
 @app.get("/db-test")
-async def db_test(db: AsyncSession = Depends(get_db)):
+async def db_test():
     try:
-        result = await db.execute(select(Restaurante).limit(1))
-        rest = result.scalar_one_or_none()
-        if rest:
-            return {"db_connected": True, "restaurante": rest.nombre}
-        else:
-            return {"db_connected": True, "restaurante": "ninguno"}
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "message": "Database connection successful"}
     except Exception as e:
-        return {"db_connected": False, "error": str(e)}
+        return {"status": "error", "message": str(e)}
 
 @app.get("/auth-test")
 async def auth_test(api_key: str = Header(..., alias="X-Restaurant-API-Key")):
