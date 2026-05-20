@@ -14,11 +14,10 @@ Arquitectura: FastAPI + SQLAlchemy 2.0 Async + PostgreSQL + WhatsApp Cloud API
 import os
 import uuid
 import json
-import time
+import time as time_module      # <-- módulo del sistema para time.time()
 import httpx
 import logging
-from datetime import datetime, date, time, timedelta
-import time
+from datetime import datetime, date, time, timedelta   # 'time' es datetime.time para tipos
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
@@ -36,6 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 from pydantic import BaseModel, Field, ConfigDict
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN Y LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +120,7 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
+
 class RestauranteApiKey(Base):
     __tablename__ = "restaurante_api_keys"
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
@@ -337,7 +338,7 @@ RATE_LIMIT_MAX = 100
 RATE_LIMIT_WINDOW = 60
 
 def check_rate_limit(client_ip: str) -> bool:
-    now = time.time()
+    now = time_module.time()   # <-- uso del módulo del sistema
     RATE_LIMIT_DB[client_ip] = [t for t in RATE_LIMIT_DB[client_ip] if t > now - RATE_LIMIT_WINDOW]
     if len(RATE_LIMIT_DB[client_ip]) >= RATE_LIMIT_MAX:
         return False
@@ -367,10 +368,11 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
 
 @app.on_event("startup")
 async def startup():
-    #await seed_database_once()
+    # await seed_database_once()
     pass 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# SEED DATA (solo la primera vez)
+# SEED DATA (solo la primera vez) - No usado actualmente
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_database_once():
     async with async_session_maker() as db:
@@ -390,7 +392,7 @@ async def seed_database_once():
             RestauranteConfig(id_restaurante=r2.id_restaurante, welcome_message="Bienvenido a Al Hizam", tax_rate=0.10, reservation_enabled=True)
         ])
         await db.commit()
-        logger.info("Seed básico completado. Las API keys deben insertarse manualmente en Supabase.")
+        logger.info("Seed básico completado. Las API keys deben insertarse manualmente en la base de datos.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WEBHOOK Y BOT
@@ -531,7 +533,6 @@ async def auth_test(api_key: str = Header(..., alias="X-Restaurant-API-Key")):
 
 @app.get("/api/v1/restaurantes")
 async def get_restaurantes(rest: Restaurante = Depends(get_tenant)):
-    # Devuelve el restaurante autenticado (o una lista con él)
     return [rest]
 
 @app.get("/api/v1/pedidos")
@@ -659,7 +660,7 @@ const refresh = async () => {
   const p = await fetch('/api/v1/pedidos/activos').then(x=>x.json());
   document.getElementById('r-count').textContent = r.length;
   document.getElementById('p-count').textContent = p.length;
-  document.getElementById('r-body').innerHTML = r.map(x => `<tr class="border-t"><td class="p-2">${x.codigo_reserva}</td><td>${x.num_personas}</td><td>${x.hora_reserva}</td><td>${x.estado}</td></tr>`).join('');
+  document.getElementById('r-body').innerHTML = r.map(x => `<tr class="border-t"><td class="p-2">${x.codigo_reserva}</td><td>${x.num_personas}<tr><td>${x.hora_reserva}</td><td>${x.estado}</tr>`).join('');
   document.getElementById('p-body').innerHTML = p.map(x => `<tr class="border-t"><td class="p-2">${x.id_pedido.slice(0,8)}</td><td>${x.total} MAD</td><td>${x.estado}</td></tr>`).join('');
 };
 setInterval(refresh, 30000); refresh();
@@ -689,7 +690,6 @@ async def panel_login_submit(request: Request, api_key: str = Form(...), db: Asy
 def panel_recepcion(request: Request):
     if "api_key" not in request.session:
         return panel_login(request, error="No autenticado")
-    # Podrías obtener el nombre del restaurante desde la sesión o DB
     return HTMLResponse(content=HTML_RECEPCION.format(nombre="Restinga"))
 
 @app.get("/env-check")
@@ -704,7 +704,6 @@ async def env_check():
 async def panel_metricas(request: Request, db: AsyncSession = Depends(get_db)):
     if "api_key" not in request.session:
         return panel_login(request, error="No autenticado")
-    # Obtener el restaurante desde la sesión
     rest_id = uuid.UUID(request.session.get("rest_id"))
     rest = await db.get(Restaurante, rest_id)
     if not rest:
