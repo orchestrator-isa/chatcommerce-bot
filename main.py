@@ -514,6 +514,18 @@ async def process_inbound_message(payload: dict):
 def health():
     return {"status": "ok", "version": "2.3.0-MVP", "ts": datetime.utcnow().isoformat()}
 
+@app.get("/db-test")
+async def db_test(db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(select(Restaurante).limit(1))
+        rest = result.scalar_one_or_none()
+        if rest:
+            return {"db_connected": True, "restaurante": rest.nombre}
+        else:
+            return {"db_connected": True, "restaurante": "ninguno"}
+    except Exception as e:
+        return {"db_connected": False, "error": str(e)}
+
 @app.get("/api/v1/restaurantes")
 async def get_restaurantes(rest: Restaurante = Depends(get_tenant)):
     # Devuelve el restaurante autenticado (o una lista con él)
