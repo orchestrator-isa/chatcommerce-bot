@@ -117,7 +117,7 @@ class ApiKey(Base):
     descripcion: Mapped[Optional[str]]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
 class RestauranteApiKey(Base):
     __tablename__ = "restaurante_api_keys"
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
