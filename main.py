@@ -690,6 +690,14 @@ def panel_recepcion(request: Request):
     # Podrías obtener el nombre del restaurante desde la sesión o DB
     return HTMLResponse(content=HTML_RECEPCION.format(nombre="Restinga"))
 
+@app.get("/env-check")
+async def env_check():
+    return {
+        "wa_token_exists": bool(WA_TOKEN),
+        "wa_phone_id_exists": bool(WA_PHONE_ID),
+        "panel_secret_exists": bool(PANEL_SECRET),
+    }
+
 @app.get("/panel/metricas")
 async def panel_metricas(request: Request, db: AsyncSession = Depends(get_db)):
     if "api_key" not in request.session:
