@@ -20,7 +20,6 @@ import logging
 from datetime import datetime, date, time, timedelta
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from contextlib import asynccontextmanager
 from collections import defaultdict
 from decimal import Decimal
 
@@ -30,12 +29,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, Date, Time, DateTime, JSON, select, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 from pydantic import BaseModel, Field, ConfigDict
-
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN Y LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -367,8 +365,8 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
 
 @app.on_event("startup")
 async def startup():
-    await seed_database_once()
-
+    #await seed_database_once()
+    pass 
 # ─────────────────────────────────────────────────────────────────────────────
 # SEED DATA (solo la primera vez)
 # ─────────────────────────────────────────────────────────────────────────────
