@@ -14,10 +14,10 @@ Arquitectura: FastAPI + SQLAlchemy 2.0 Async + PostgreSQL + WhatsApp Cloud API
 import os
 import uuid
 import json
-import time as time_module      # <-- módulo del sistema para time.time()
+import time as time_module
 import httpx
 import logging
-from datetime import datetime, date, time, timedelta   # 'time' es datetime.time para tipos
+from datetime import datetime, date, timedelta
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
@@ -35,7 +35,6 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 from pydantic import BaseModel, Field, ConfigDict
-
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURACIÓN Y LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,8 +131,8 @@ class RestauranteConfig(Base):
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     welcome_message: Mapped[str] = mapped_column(Text, default="¡Bienvenido!")
     menu_auto_send: Mapped[bool] = mapped_column(Boolean, default=True)
-    horario_apertura: Mapped[Optional[time]]
-    horario_cierre: Mapped[Optional[time]]
+    horario_apertura: Mapped[Optional[datetime.time]]
+    horario_cierre: Mapped[Optional[datetime.time]]
     dias_abierto: Mapped[list] = mapped_column(JSON, default=list)
     tax_rate: Mapped[Decimal] = mapped_column(DECIMAL(5,2), default=0.00)
     delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -253,7 +252,7 @@ class Reservacion(Base):
     codigo_reserva: Mapped[str] = mapped_column(String, unique=True)
     estado: Mapped[EstadoReserva] = mapped_column(SAEnum(EstadoReserva, name="estado_reserva", create_type=False), default=EstadoReserva.pendiente)
     fecha_reserva: Mapped[date]
-    hora_reserva: Mapped[time]
+    hora_reserva: Mapped[datetime.time]
     num_personas: Mapped[int]
     mesa_asignada: Mapped[Optional[str]]
     zona: Mapped[Optional[str]]
