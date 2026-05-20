@@ -99,7 +99,6 @@ class Restaurante(Base):
     __tablename__ = "restaurantes"
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nombre: Mapped[str]
-    api_key: Mapped[str] = mapped_column(String, unique=True)
     telefono: Mapped[Optional[str]]
     direccion: Mapped[Optional[str]]
     ciudad: Mapped[Optional[str]]
@@ -111,6 +110,20 @@ class Restaurante(Base):
     meta_verificado: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+    id_api_key: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    api_key: Mapped[str] = mapped_column(String, unique=True)
+    descripcion: Mapped[Optional[str]]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class RestauranteApiKey(Base):
+    __tablename__ = "restaurante_api_keys"
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    id_api_key: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 class RestauranteConfig(Base):
     __tablename__ = "restaurante_config"
@@ -307,7 +320,13 @@ async def get_db() -> AsyncSession:
         yield session
 
 async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), db: AsyncSession = Depends(get_db)) -> Restaurante:
-    result = await db.execute(select(Restaurante).where(Restaurante.api_key == api_key, Restaurante.activo == True))
+    # Consulta mediante las tablas relacionadas
+    result = await db.execute(
+        select(Restaurante)
+        .join(RestauranteApiKey, RestauranteApiKey.id_restaurante == Restaurante.id_restaurante)
+        .join(ApiKey, ApiKey.id_api_key == RestauranteApiKey.id_api_key)
+        .where(ApiKey.api_key == api_key, Restaurante.activo == True)
+    )
     rest = result.scalar_one_or_none()
     if not rest:
         raise HTTPException(status_code=403, detail="API Key inválida o restaurante inactivo")
