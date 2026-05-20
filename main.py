@@ -31,6 +31,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, Date, Time, DateTime, JSON, select, func
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 from pydantic import BaseModel, Field, ConfigDict
