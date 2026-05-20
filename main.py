@@ -23,8 +23,9 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from collections import defaultdict
 from decimal import Decimal
-from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+
+from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks, Request, Form
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -211,7 +212,7 @@ class Mensaje(Base):
     __tablename__ = "mensajes"
     id_mensaje: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     id_conversacion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    direccion: Mapped[str] = mapped_column(String) # inbound/outbound
+    direccion: Mapped[str] = mapped_column(String)
     tipo: Mapped[str] = mapped_column(String, default="texto")
     contenido: Mapped[Optional[str]]
     ai_intent: Mapped[Optional[str]]
@@ -285,12 +286,11 @@ class Factura(Base):
     estado_pago: Mapped[str]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS (v2)
+# PYDANTIC SCHEMAS
 # ─────────────────────────────────────────────────────────────────────────────
 class RestauranteCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     nombre: str
-    api_key: str
     telefono: Optional[str] = None
     ciudad: str
     currency_code: str = "MAD"
@@ -320,7 +320,6 @@ async def get_db() -> AsyncSession:
         yield session
 
 async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), db: AsyncSession = Depends(get_db)) -> Restaurante:
-    # Consulta mediante las tablas relacionadas
     result = await db.execute(
         select(Restaurante)
         .join(RestauranteApiKey, RestauranteApiKey.id_restaurante == Restaurante.id_restaurante)
@@ -332,7 +331,7 @@ async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), d
         raise HTTPException(status_code=403, detail="API Key inválida o restaurante inactivo")
     return rest
 
-# Rate limiting simple en memoria
+# Rate limiting en memoria
 RATE_LIMIT_DB: Dict[str, List[float]] = defaultdict(list)
 RATE_LIMIT_MAX = 100
 RATE_LIMIT_WINDOW = 60
@@ -345,7 +344,6 @@ def check_rate_limit(client_ip: str) -> bool:
     RATE_LIMIT_DB[client_ip].append(now)
     return True
 
-# WhatsApp sender async
 async def send_wa_message(wa_id: str, text: str):
     url = f"https://graph.facebook.com/{WA_API_VERSION}/{WA_PHONE_ID}/messages"
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
@@ -372,27 +370,30 @@ async def startup():
     await seed_database_once()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SEED DATA (Ejecutar solo la primera vez)
+# SEED DATA (solo la primera vez)
 # ─────────────────────────────────────────────────────────────────────────────
 async def seed_database_once():
     async with async_session_maker() as db:
         res = await db.execute(select(Restaurante).limit(1))
-        if res.scalar_one_or_none(): return
+        if res.scalar_one_or_none():
+            logger.info("Base de datos ya poblada. Seed omitido.")
+            return
 
-        r1 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Restinga", api_key="restinga-key-2026", telefono="+212668087490", ciudad="Tetuan", currency_code="MAD")
-        r2 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Cafe Al Hizam", api_key="hizam-key-2026", telefono="+212600000000", ciudad="Marrakech", currency_code="MAD")
+        logger.info("🌱 Ejecutando seed básico...")
+        r1 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Restinga", telefono="+212668087490", ciudad="Tetuan", currency_code="MAD")
+        r2 = Restaurante(id_restaurante=uuid.uuid4(), nombre="Cafe Al Hizam", telefono="+212600000000", ciudad="Marrakech", currency_code="MAD")
         db.add_all([r1, r2])
         await db.commit()
-        # Configs
+
         db.add_all([
             RestauranteConfig(id_restaurante=r1.id_restaurante, welcome_message="Marhaba bi Restinga!", tax_rate=0.10, reservation_enabled=True),
             RestauranteConfig(id_restaurante=r2.id_restaurante, welcome_message="Bienvenido a Al Hizam", tax_rate=0.10, reservation_enabled=True)
         ])
         await db.commit()
-        logger.info("Seed data ejecutado. Descomenta en producción tras primera ejecución.")
+        logger.info("Seed básico completado. Las API keys deben insertarse manualmente en Supabase.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ENDPOINTS: WEBHOOK & BOT LOGIC
+# WEBHOOK Y BOT
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/whatsapp/webhook")
 def webhook_verify(request: Request):
@@ -417,14 +418,21 @@ async def process_inbound_message(payload: dict):
         entry = payload["entry"][0]
         changes = entry["changes"][0]["value"]
         msg_data = changes.get("messages", [{}])[0]
-        if not msg_data: return
+        if not msg_data:
+            return
 
         wa_id = msg_data["from"]
         text = msg_data["text"]["body"].lower().strip()
 
-        # Restinga tenant por defecto para MVP
-        rest_id = uuid.UUID("restinga-placeholder") # Reemplazar con lógica real de tenant mapping
         async with async_session_maker() as db:
+            # Obtener el primer restaurante activo como tenant por defecto
+            result = await db.execute(select(Restaurante).where(Restaurante.activo == True).limit(1))
+            rest = result.scalar_one_or_none()
+            if not rest:
+                logger.error("No hay restaurantes activos para procesar mensajes")
+                return
+            rest_id = rest.id_restaurante
+
             # Cliente
             res = await db.execute(select(Cliente).where(Cliente.wa_id == wa_id))
             cliente = res.scalar_one_or_none()
@@ -505,7 +513,13 @@ async def process_inbound_message(payload: dict):
 # ENDPOINTS API v1
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/health")
-def health(): return {"status": "ok", "ts": datetime.utcnow().isoformat()}
+def health():
+    return {"status": "ok", "version": "2.3.0-MVP", "ts": datetime.utcnow().isoformat()}
+
+@app.get("/api/v1/restaurantes")
+async def get_restaurantes(rest: Restaurante = Depends(get_tenant)):
+    # Devuelve el restaurante autenticado (o una lista con él)
+    return [rest]
 
 @app.get("/api/v1/pedidos")
 async def get_pedidos(db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
@@ -530,7 +544,8 @@ async def create_pedido(data: PedidoCreate, db: AsyncSession = Depends(get_db), 
 @app.patch("/api/v1/pedidos/{pedido_id}")
 async def update_pedido_estado(pedido_id: uuid.UUID, nuevo_estado: EstadoPedido, db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
     ped = await db.get(Pedido, pedido_id)
-    if not ped or ped.id_restaurante != rest.id_restaurante: raise HTTPException(404, "Pedido no encontrado")
+    if not ped or ped.id_restaurante != rest.id_restaurante:
+        raise HTTPException(404, "Pedido no encontrado")
     hist = PedidoHistorial(id_pedido=ped.id_pedido, estado_anterior=ped.estado.value, estado_nuevo=nuevo_estado.value, cambiado_por="admin")
     db.add(hist)
     ped.estado = nuevo_estado
@@ -547,19 +562,22 @@ async def get_reservas_hoy(db: AsyncSession = Depends(get_db), rest: Restaurante
 async def create_reserva(data: ReservaCreate, db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
     config_res = await db.execute(select(RestauranteConfig).where(RestauranteConfig.id_restaurante == rest.id_restaurante))
     config = config_res.scalar_one_or_none()
-    if not config or not config.reservation_enabled: raise HTTPException(400, "Reservas deshabilitadas")
-
-    codigo = f"RES-{date.today().strftime('%Y%m%d')}-{len(await db.execute(select(Reservacion))) + 1:02d}"
-    res = Reservacion(id_restaurante=rest.id_restaurante, id_cliente=uuid.uuid4(), codigo_reserva=codigo, estado=EstadoReserva.pendiente, **data.dict())
-    db.add(res)
+    if not config or not config.reservation_enabled:
+        raise HTTPException(400, "Reservas deshabilitadas")
+    count = (await db.execute(select(func.count(Reservacion.id_reserva)))).scalar()
+    codigo = f"RES-{date.today().strftime('%Y%m%d')}-{count + 1:02d}"
+    reserva = Reservacion(id_restaurante=rest.id_restaurante, id_cliente=uuid.uuid4(), codigo_reserva=codigo, estado=EstadoReserva.pendiente, **data.dict())
+    db.add(reserva)
     await db.commit()
-    return res
+    return reserva
 
 @app.patch("/api/v1/reservaciones/{reserva_id}/confirmar")
 async def confirmar_reserva(reserva_id: uuid.UUID, db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
     res = await db.get(Reservacion, reserva_id)
-    if not res or res.id_restaurante != rest.id_restaurante: raise HTTPException(404, "No encontrada")
-    if res.estado != EstadoReserva.pendiente: raise HTTPException(400, "Solo pendientes")
+    if not res or res.id_restaurante != rest.id_restaurante:
+        raise HTTPException(404, "No encontrada")
+    if res.estado != EstadoReserva.pendiente:
+        raise HTTPException(400, "Solo pendientes")
     res.estado = EstadoReserva.confirmada
     await db.commit()
     return res
@@ -567,8 +585,10 @@ async def confirmar_reserva(reserva_id: uuid.UUID, db: AsyncSession = Depends(ge
 @app.patch("/api/v1/reservaciones/{reserva_id}/asignar-mesa")
 async def asignar_mesa(reserva_id: uuid.UUID, mesa: str, zona: str, db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
     res = await db.get(Reservacion, reserva_id)
-    if not res or res.id_restaurante != rest.id_restaurante: raise HTTPException(404, "No encontrada")
-    if res.estado not in [EstadoReserva.pendiente, EstadoReserva.confirmada]: raise HTTPException(400, "Estado inválido")
+    if not res or res.id_restaurante != rest.id_restaurante:
+        raise HTTPException(404, "No encontrada")
+    if res.estado not in [EstadoReserva.pendiente, EstadoReserva.confirmada]:
+        raise HTTPException(400, "Estado inválido")
     res.mesa_asignada = mesa
     res.zona = zona
     await db.commit()
@@ -585,8 +605,8 @@ async def dashboard_hoy(db: AsyncSession = Depends(get_db), rest: Restaurante = 
     reservas = await db.execute(select(func.count(Reservacion.id_reserva)).where(Reservacion.id_restaurante == rest.id_restaurante, Reservacion.fecha_reserva == hoy))
     return {
         "ingresos_hoy": float(ingresos.scalar() or 0),
-        "pedidos_hoy": pedidos.scalar(),
-        "reservas_hoy": reservas.scalar()
+        "pedidos_hoy": pedidos.scalar() or 0,
+        "reservas_hoy": reservas.scalar() or 0
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -639,26 +659,39 @@ def panel_login(request: Request, error: str = ""):
 
 @app.post("/panel/login")
 async def panel_login_submit(request: Request, api_key: str = Form(...), db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(Restaurante).where(Restaurante.api_key == api_key))
-    rest = res.scalar_one_or_none()
-    if not rest: return panel_login(request, error="Clave inválida")
+    result = await db.execute(
+        select(Restaurante)
+        .join(RestauranteApiKey, RestauranteApiKey.id_restaurante == Restaurante.id_restaurante)
+        .join(ApiKey, ApiKey.id_api_key == RestauranteApiKey.id_api_key)
+        .where(ApiKey.api_key == api_key, Restaurante.activo == True)
+    )
+    rest = result.scalar_one_or_none()
+    if not rest:
+        return panel_login(request, error="Clave inválida")
     request.session["rest_id"] = str(rest.id_restaurante)
     request.session["api_key"] = api_key
-    from fastapi.responses import RedirectResponse
     return RedirectResponse("/panel/recepcion", status_code=303)
 
 @app.get("/panel/recepcion")
 def panel_recepcion(request: Request):
-    if "api_key" not in request.session: return panel_login(request, error="No autenticado")
-    return HTMLResponse(content=HTML_RECEPCION.format(nombre="Restinga")) # Podría queryar DB
+    if "api_key" not in request.session:
+        return panel_login(request, error="No autenticado")
+    # Podrías obtener el nombre del restaurante desde la sesión o DB
+    return HTMLResponse(content=HTML_RECEPCION.format(nombre="Restinga"))
 
 @app.get("/panel/metricas")
 async def panel_metricas(request: Request, db: AsyncSession = Depends(get_db)):
-    if "api_key" not in request.session: return panel_login(request, error="No autenticado")
-    data = await dashboard_hoy(db)
+    if "api_key" not in request.session:
+        return panel_login(request, error="No autenticado")
+    # Obtener el restaurante desde la sesión
+    rest_id = uuid.UUID(request.session.get("rest_id"))
+    rest = await db.get(Restaurante, rest_id)
+    if not rest:
+        return panel_login(request, error="Restaurante no encontrado")
+    data = await dashboard_hoy(db, rest=rest)
     html = f"""
     <!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 p-6">
-    <h1 class="text-2xl font-bold mb-6">📊 Métricas Hoy</h1>
+    <h1 class="text-2xl font-bold mb-6">📊 Métricas Hoy - {rest.nombre}</h1>
     <div class="grid grid-cols-3 gap-4">
       <div class="bg-white p-4 rounded shadow"><div class="text-green-500 text-3xl">💰</div><h2 class="text-lg">{data['ingresos_hoy']:.2f} MAD</h2><p class="text-gray-500">Ingresos</p></div>
       <div class="bg-white p-4 rounded shadow"><div class="text-blue-500 text-3xl">🛒</div><h2 class="text-lg">{data['pedidos_hoy']}</h2><p class="text-gray-500">Pedidos</p></div>
