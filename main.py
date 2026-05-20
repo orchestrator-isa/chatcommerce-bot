@@ -526,6 +526,10 @@ async def db_test(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         return {"db_connected": False, "error": str(e)}
 
+@app.get("/auth-test")
+async def auth_test(api_key: str = Header(..., alias="X-Restaurant-API-Key")):
+    return {"api_key_received": api_key}
+
 @app.get("/api/v1/restaurantes")
 async def get_restaurantes(rest: Restaurante = Depends(get_tenant)):
     # Devuelve el restaurante autenticado (o una lista con él)
