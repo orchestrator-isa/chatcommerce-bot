@@ -306,7 +306,7 @@ class PedidoCreate(BaseModel):
 class ReservaCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     fecha_reserva: date
-    hora_reserva: time
+    hora_reserva: datetime.time  
     num_personas: int = Field(gt=0)
     mesa_asignada: Optional[str] = None
     zona: Optional[str] = None
@@ -579,7 +579,7 @@ async def create_reserva(data: ReservaCreate, db: AsyncSession = Depends(get_db)
         raise HTTPException(400, "Reservas deshabilitadas")
     count = (await db.execute(select(func.count(Reservacion.id_reserva)))).scalar()
     codigo = f"RES-{date.today().strftime('%Y%m%d')}-{count + 1:02d}"
-    reserva = Reservacion(id_restaurante=rest.id_restaurante, id_cliente=uuid.uuid4(), codigo_reserva=codigo, estado=EstadoReserva.pendiente, **data.dict())
+    reserva = Reservacion(id_restaurante=rest.id_restaurante, id_cliente=uuid.uuid4(), codigo_reserva=codigo, estado=EstadoReserva.pendiente, **data.model_dump())
     db.add(reserva)
     await db.commit()
     return reserva
