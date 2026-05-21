@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-🏗️ ORQUESTRATOR ISA v5.0.0-STABLE
-Stack: FastAPI + SQLAlchemy 2.0 Async + psycopg3 + WhatsApp Cloud API
-Python 3.10 | Render | Neon/Supabase | Single-File MVP
+🏗️ ORQUESTRATOR ISA v9.0-STABLE
+Stack: FastAPI + SQLAlchemy 2.0 (psycopg3 async) + WhatsApp Cloud API
+Python 3.10 | Render | Neon DB | Production Ready
 """
 import os, json, uuid, time as time_module, httpx, logging
 from datetime import datetime, date, time as datetime_time
@@ -23,12 +23,12 @@ from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, 
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 # ==========================================================
-# 🔧 CONFIGURACIÓN SEGURA (Espacios eliminados, fallbacks robustos)
+# 🔧 CONFIGURACIÓN SEGURA (Blindaje contra crashes en arranque)
 # ==========================================================
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("orquestrator_bot")
 
-# Variables limpias (sin espacios al final)
+# Variables limpias (.strip() elimina espacios invisibles de Render)
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
@@ -40,7 +40,7 @@ if not WA_TOKEN: logger.warning("⚠️ WHATSAPP_TOKEN vacío. Envío WA deshabi
 if not WA_PHONE_ID: logger.warning("⚠️ PHONE_NUMBER_ID vacío. Webhook deshabilitado.")
 
 # ==========================================================
-# 🗄️ ENGINE DB (Neon/PostgreSQL + Pool settings anti-SSL-drop)
+# 🗄️ ENGINE DB (Neon/PostgreSQL + Anti-SSL-Drop)
 # ==========================================================
 engine = None
 async_session_maker = None
@@ -50,11 +50,15 @@ if DATABASE_URL:
     if DATABASE_URL.startswith("postgresql://") and "psycopg" not in DATABASE_URL:
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_async_engine(
-        DATABASE_URL, pool_pre_ping=True, pool_recycle=300, echo=False,
+        DATABASE_URL,
+        pool_pre_ping=True,       # ✅ Revive conexiones caídas antes de usarlas
+        pool_recycle=300,         # ✅ Cierra y reabre cada 5 min (evita SSL drop)
+        pool_size=5, max_overflow=2,
+        echo=False,
         connect_args={"sslmode": "require"}
     )
     async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    logger.info("✅ Engine DB inicializado (pool_pre_ping activo)")
+    logger.info("✅ Engine DB inicializado (Neon-compatible)")
 
 class Base(DeclarativeBase): pass
 
@@ -151,6 +155,7 @@ async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), d
     return rest
 
 async def send_wa(phone: str, text: str):
+    # ✅ BLINDAJE HEADER: nunca enviar "Bearer " vacío
     if not WA_PHONE_ID or not WA_TOKEN: return logger.info(f"[SIM-WA] {phone}: {text}")
     url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
@@ -158,7 +163,7 @@ async def send_wa(phone: str, text: str):
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(url, json=payload, headers=headers)
-            if r.status_code != 200: logger.error(f"WA Error {r.status_code}: {r.text}")
+            if r.status_code != 200: logger.error(f"WA Error {r.status_code}: {r.text[:200]}")
     except Exception as e: logger.error(f"WA Exception: {e}")
 
 rate_limits: Dict[str, List[float]] = defaultdict(list)
@@ -247,7 +252,7 @@ async def process_wa_message(payload: dict):
 # ==========================================================
 # 🌐 APP & ROUTES
 # ==========================================================
-app = FastAPI(title="Orquestrator ISA", version="5.0.0")
+app = FastAPI(title="Orquestrator ISA", version="9.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
 
