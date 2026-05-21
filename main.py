@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-🏗️ ORQUESTRATOR ISA v7.0-NEON-STABLE
-Stack: FastAPI + SQLAlchemy 2.0 Async (psycopg) + Neon DB + WhatsApp Cloud API
+🏗️ ORQUESTRATOR ISA v8.0-GOLDEN-COPY
+Stack: FastAPI + SQLAlchemy 2.0 (psycopg) + Neon DB + WhatsApp Cloud API
 Python 3.10 | Render | Production Ready
 """
 import os
@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
 from decimal import Decimal
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -23,16 +24,16 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, Date, Time, DateTime, JSON, select, insert
+from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, Date, Time, DateTime, JSON, select
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
 # ==========================================================
-# 🔧 CONFIGURACIÓN SEGURA
+# 🔧 CONFIGURACIÓN SEGURA (BLINDADA)
 # ==========================================================
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("orquestrator_bot")
 
-# 1. STRIP en variables críticas para evitar "Bearer " vacío
+# 1. STRIP EN TODAS LAS VARIABLES (Elimina espacios invisibles)
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
@@ -50,15 +51,15 @@ engine = None
 async_session_maker = None
 
 if DATABASE_URL:
-    # Asegurar esquema psycopg
+    # Asegurar formato async para psycopg3
     if "postgresql://" in DATABASE_URL and "psycopg" not in DATABASE_URL:
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     
-    # 2. POOL SETTINGS (Soluciona "SSL connection closed unexpectedly")
+    # 2. POOL SETTINGS (Soluciona SSL connection closed unexpectedly)
     engine = create_async_engine(
         DATABASE_URL,
         pool_pre_ping=True,       # ✅ Revive conexiones caídas antes de usarlas
-        pool_recycle=300,         # ✅ Recicla cada 5 min
+        pool_recycle=300,         # ✅ Cierra/reabre cada 5 min
         echo=False
     )
     async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -111,7 +112,6 @@ class Pedido(Base):
     estado: Mapped[EstadoPedido] = mapped_column(SAEnum(EstadoPedido, name="estado_pedido", create_type=False), default=EstadoPedido.pendiente)
     items: Mapped[list] = mapped_column(JSONB, default=list)
     total: Mapped[Decimal] = mapped_column(DECIMAL(10,2), default=Decimal("0.00"))
-    delivery_type: Mapped[str] = mapped_column(String, default="pickup")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 class Reservacion(Base):
@@ -138,7 +138,6 @@ async def get_db() -> AsyncSession:
 async def send_wa(phone: str, text: str):
     if not WA_PHONE_ID or not WA_TOKEN: return logger.info(f"[SIM-WA] {phone}: {text}")
     url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
-    # 4. HEADER BLINDADO
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product":"whatsapp","to":phone,"type":"text","text":{"body": text[:1600]}}
     try:
@@ -148,12 +147,8 @@ async def send_wa(phone: str, text: str):
     except Exception as e: logger.error(f"WA Ex: {e}")
 
 # ==========================================================
-# 🤖 BOT LOGIC (HÍBRIDA: Estado en Memoria, Pedidos en DB)
+# 🤖 BOT LOGIC
 # ==========================================================
-carts: Dict[str, List[dict]] = {}
-user_lang: Dict[str, str] = {}
-pedido_estado: Dict[str, dict] = {}
-
 async def process_msg(payload: dict):
     if not async_session_maker: return
     try:
@@ -164,11 +159,9 @@ async def process_msg(payload: dict):
 
         phone = msg["from"]
         txt = msg["text"]["body"].strip().lower()
-        lang = user_lang.get(phone, "es")
-        fase = pedido_estado.get(phone, {}).get("fase", "inicio")
 
         async with async_session_maker() as db:
-            # 1. Fallback Restaurante
+            # 1. Fallback restaurante
             res_r = await db.execute(select(Restaurante).limit(1))
             rest = res_r.scalar_one_or_none()
             if not rest: return
@@ -178,7 +171,7 @@ async def process_msg(payload: dict):
             res_c = await db.execute(select(Cliente).where(Cliente.wa_id == phone))
             cli = res_c.scalar_one_or_none()
             if not cli:
-                cli = Cliente(id_restaurante=rid, wa_id=phone, telefono=phone, language_pref=lang)
+                cli = Cliente(id_restaurante=rid, wa_id=phone, telefono=phone, language_pref="es")
                 db.add(cli); await db.flush()
 
             # 3. Conversación
@@ -192,7 +185,7 @@ async def process_msg(payload: dict):
             ctx = conv.contexto_bot or {"fase":"lang", "carrito": []}
             reply = "🤔 Usa: `m` menú, `v` pedido, `c` confirmar, `r` reservar, `q` salir"
 
-            # --- MÁQUINA DE ESTADOS ---
+            # Máquina de Estados
             if ctx.get("fase") == "lang" or txt in ("q", "salir"):
                 if txt == "1": reply="🇪🇸 Español activado."; ctx["lang"]="es"
                 elif txt == "2": reply="🇬🇧 English active."; ctx["lang"]="en"
@@ -225,7 +218,7 @@ async def process_msg(payload: dict):
             elif ctx.get("fase") == "pago":
                 total = sum(i['p'] for i in ctx.get("carrito", []))
                 if txt == "1":
-                    # GUARDAR PEDIDO EN DB NEON
+                    # GUARDAR PEDIDO EN DB
                     ped = Pedido(id_restaurante=rid, id_cliente=cli.id_cliente, items=ctx["carrito"], total=Decimal(str(total)))
                     db.add(ped); await db.flush()
                     reply = f"✅ Guardado! ID: {str(ped.id_pedido)[-6:]}"
@@ -255,12 +248,13 @@ async def process_msg(payload: dict):
 # ==========================================================
 # 🌐 APP & ROUTES
 # ==========================================================
-app = FastAPI(title="Orquestrator ISA v7.0")
+app = FastAPI(title="Orquestrator ISA v8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
 
 @app.get("/health")
-def health(): return {"status":"ok","db":"online" if engine else "offline"}
+def health(): 
+    return {"status":"ok","db":"online" if engine else "offline"}
 
 @app.get("/api/whatsapp/webhook")
 def wb_verify(req: Request):
@@ -277,12 +271,21 @@ async def wb_post(req: Request, bg: BackgroundTasks):
 
 # --- PANEL HTML ---
 HTML_LOGIN = """<html><body class="bg-gray-100 flex h-screen items-center justify-center"><div class="bg-white p-8 rounded shadow w-96"><h1 class="text-xl font-bold mb-4">🔐 Panel</h1><form action="/panel/login" method="post"><input name="api_key" class="w-full p-2 border mb-4" placeholder="API Key" required><button class="w-full bg-blue-600 text-white p-2 rounded">Entrar</button></form></div></body></html>"""
-HTML_RECEPCION = """<html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 p-6"><h1 class="text-2xl font-bold mb-6">📊 Recepción</h1><div id="pedidos" class="text-gray-500">Cargando...</div><script>fetch('/api/v1/pedidos/activos').then(r=>r.json()).then(d=>document.getElementById('pedidos').innerHTML=d.length+' pedidos activos');</script></body></html>"""
+HTML_RECEPCION = """<html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 p-6"><h1 class="text-2xl font-bold mb-6">📊 Recepción</h1><div id="pedidos" class="text-gray-500">Cargando...</div><script>fetch('/health').then(r=>r.json()).then(d=>document.getElementById('pedidos').innerText=JSON.stringify(d));</script></body></html>"""
 
-@app.get("/panel/login") def p_login(): return HTMLResponse(content=HTML_LOGIN)
-@app.post("/panel/login") def p_login_post(req: Request, api_key: str = Form(...)): req.session["auth"]="ok"; return RedirectResponse("/panel/recepcion", status_code=303)
-@app.get("/panel/recepcion") def p_recep(req: Request):
-    if req.session.get("auth") != "ok": return RedirectResponse("/panel/login")
+@app.get("/panel/login")
+def p_login(): 
+    return HTMLResponse(content=HTML_LOGIN)
+
+@app.post("/panel/login")
+def p_login_post(req: Request, api_key: str = Form(...)): 
+    req.session["auth"]="ok"
+    return RedirectResponse("/panel/recepcion", status_code=303)
+
+@app.get("/panel/recepcion")
+def p_recep(req: Request):
+    if req.session.get("auth") != "ok": 
+        return RedirectResponse("/panel/login")
     return HTMLResponse(content=HTML_RECEPCION)
 
 @app.get("/api/v1/pedidos/activos")
