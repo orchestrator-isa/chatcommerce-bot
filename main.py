@@ -1,313 +1,210 @@
-# -*- coding: utf-8 -*-
-"""
-🏗️ ORQUESTRATOR ISA v9.0-STABLE
-Stack: FastAPI + SQLAlchemy 2.0 (psycopg3 async) + WhatsApp Cloud API
-Python 3.10 | Render | Neon DB | Production Ready
-"""
-import os, json, uuid, time as time_module, httpx, logging
-from datetime import datetime, date, time as datetime_time
-from enum import Enum
-from typing import Optional, List, Dict, Any
-from collections import defaultdict
-from decimal import Decimal
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Depends, HTTPException, Header, BackgroundTasks, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+#!/usr/bin/env python3
+import os, logging, json, httpx
+from datetime import datetime
+from pathlib import Path
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import PlainTextResponse
+from supabase import create_client, Client
+from typing import Dict, List, Optional
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Enum as SAEnum, String, Text, Integer, Boolean, DECIMAL, Date, Time, DateTime, JSON, select, func
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
+VERSION = "8.9-PRODUCCIÓN"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("isa-bot")
 
-# ==========================================================
-# 🔧 CONFIGURACIÓN SEGURA (Blindaje contra crashes en arranque)
-# ==========================================================
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("orquestrator_bot")
+# ========== CONFIGURACIÓN ==========
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "isa_verify_2026")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 
-# Variables limpias (.strip() elimina espacios invisibles de Render)
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
-WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
-WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
-WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", "").strip()
+supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+app = FastAPI(title="Orquestrator ISA", version=VERSION)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-if not DATABASE_URL: logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
-if not WA_TOKEN: logger.warning("⚠️ WHATSAPP_TOKEN vacío. Envío WA deshabilitado.")
-if not WA_PHONE_ID: logger.warning("⚠️ PHONE_NUMBER_ID vacío. Webhook deshabilitado.")
+# ========== IDIOMAS ==========
+LANG_DIR = Path("lang")
+LANGUAGES: Dict[str, dict] = {}
+if LANG_DIR.exists():
+    for f in LANG_DIR.glob("*.json"):
+        try: LANGUAGES[f.stem] = json.loads(f.read_text(encoding="utf-8"))
+        except: pass
+else: LANG_DIR.mkdir(exist_ok=True)
 
-# ==========================================================
-# 🗄️ ENGINE DB (Neon/PostgreSQL + Anti-SSL-Drop)
-# ==========================================================
-engine = None
-async_session_maker = None
+LANG_MAP = {'english':'en','spanish':'es','french':'fr','darija':'dar','arabic':'ar'}
+def get_text(lang: str, key: str, **kw) -> str:
+    t = LANGUAGES.get(LANG_MAP.get(lang, 'es'), LANGUAGES.get('es', {})).get(key, key)
+    return t.format(**kw) if kw else t
 
-if DATABASE_URL:
-    # Asegurar formato async para psycopg
-    if DATABASE_URL.startswith("postgresql://") and "psycopg" not in DATABASE_URL:
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
-    engine = create_async_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,       # ✅ Revive conexiones caídas antes de usarlas
-        pool_recycle=300,         # ✅ Cierra y reabre cada 5 min (evita SSL drop)
-        pool_size=5, max_overflow=2,
-        echo=False,
-        connect_args={"sslmode": "require"}
-    )
-    async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    logger.info("✅ Engine DB inicializado (Neon-compatible)")
+# ========== ESTADOS ==========
+carts: Dict[str, List[dict]] = {}
+user_lang: Dict[str, str] = {}
+pedido_estado: Dict[str, dict] = {}
+TIEMPOS = {"normal":{"recoger":"5-10 min","domicilio":"20-30 min"}}
 
-class Base(DeclarativeBase): pass
+# ========== MENÚ & CARRITO ==========
+async def get_menu(cid: str, lang: str) -> tuple:
+    if not supabase: return "❌ DB offline", []
+    lk = LANG_MAP.get(lang, 'es')
+    res = supabase.table("menu_items").select("*").eq("client_id", cid).eq("is_available", True).execute()
+    if not res.data: return "📋 *MENÚ*\nNo hay platos.", []
+    lines = ["📋 *MENÚ RESTINGA*", ""]
+    for i, it in enumerate(res.data, 1):
+        tr = it.get("translations", {}) or {}
+        name = tr.get(lk) or tr.get('es') or it.get("dish_name", "Plato")
+        p = "🆓" if it.get("price",0)==0 else f"{it['price']} MAD"
+        lines.append(f"{i}. *{name}* — {p}")
+    txt = "\n".join(lines)
+    if len(txt) > 1500:
+        mid = txt[:1500].rfind("\n")
+        return txt[:mid if mid>0 else 750], res.data, txt[mid if mid>0 else 750:]
+    return txt, res.data, ""
 
-# ==========================================================
-# 📦 MODELOS SQLALCHEMY 2.0 (Sintaxis limpia, tipos exactos)
-# ==========================================================
-class EstadoPedido(str, Enum):
-    pendiente="pendiente", confirmado="confirmado", en_preparacion="en_preparacion", listo="listo", entregado="entregado", cancelado="cancelado"
+async def add_to_cart(uid: str, idx: int, cid: str, lang: str) -> str:
+    _, platos, _ = await get_menu(cid, lang)
+    if not platos or idx < 1 or idx > len(platos): return f"❌ Número inválido. Menú tiene {len(platos)}."
+    sel = platos[idx-1]
+    if uid not in carts: carts[uid] = []
+    carts[uid].append({"name": sel["dish_name"], "price": sel["price"]})
+    total = sum(i["price"] for i in carts[uid])
+    return f"✅ {sel['dish_name']} añadido.\n💰 Subtotal: {total} MAD. Escribe *pedido* o *c*."
 
-class EstadoReserva(str, Enum):
-    pendiente="pendiente", confirmada="confirmada", sentada="sentada", completada="completada", cancelada="cancelada", no_show="no_show"
+async def get_cart(uid: str, lang: str) -> str:
+    if uid not in carts or not carts[uid]: return "🛒 Carrito vacío. Escribe *m*."
+    items = {}
+    for i in carts[uid]:
+        items[i["name"]] = items.get(i["name"], 0) + i["price"]
+    lines = [f"• {k} — {v} MAD" for k, v in items.items()]
+    total = sum(items.values())
+    items_txt = "\n".join(lines)
+    return f"🛒 *TU PEDIDO*\n{items_txt}\n💰 *TOTAL: {total} MAD*\nEscribe *c* para confirmar."
 
-class Restaurante(Base):
-    __tablename__ = "restaurantes"
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    nombre: Mapped[str] = mapped_column(String)
-    activo: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+# ========== GUARDAR PEDIDO (DB REAL) ==========
+async def save_order(uid: str, total: int, tipo: str, dir: str, met: str) -> dict:
+    try:
+        if not supabase: return {"numero": "TEMP"}
+        data = {
+            "customer_phone": uid,
+            "items_json": [{"name": i["name"], "price": i["price"]} for i in carts.get(uid, [])],
+            "total_mad": total,
+            "estado": "nuevo",
+            "tipo_entrega": tipo,
+            "direccion": dir,
+            "metodo_pago": met,
+            "created_at": datetime.now().isoformat()
+        }
+        res = supabase.table("orders").insert(data).execute()
+        num = res.data[0].get("id", "")[-6:].upper() if res.data else "???"
+        return {"numero": f"ORD-{num}"}
+    except Exception as e:
+        logger.error(f"❌ DB Error: {e}")
+        return {"numero": "FAIL"}
 
-class ApiKey(Base):
-    __tablename__ = "api_keys"
-    id_api_key: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    api_key: Mapped[str] = mapped_column(String, unique=True)
-    activo: Mapped[bool] = mapped_column(Boolean, default=True)
-
-class RestauranteApiKey(Base):
-    __tablename__ = "restaurante_api_keys"
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    id_api_key: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-
-class Cliente(Base):
-    __tablename__ = "clientes"
-    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    wa_id: Mapped[str] = mapped_column(String, unique=True)
-    language_pref: Mapped[str] = mapped_column(String, default="es")
-
-class Conversacion(Base):
-    __tablename__ = "conversaciones"
-    id_conversacion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    contexto_bot: Mapped[dict] = mapped_column(JSONB, default=dict)
-    last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
-class Mensaje(Base):
-    __tablename__ = "mensajes"
-    id_mensaje: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id_conversacion: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    direccion: Mapped[str] = mapped_column(String)
-    contenido: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-class Pedido(Base):
-    __tablename__ = "pedidos"
-    id_pedido: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    estado: Mapped[EstadoPedido] = mapped_column(SAEnum(EstadoPedido, name="estado_pedido", create_type=False), default=EstadoPedido.pendiente)
-    items: Mapped[list] = mapped_column(JSONB, default=list)
-    total: Mapped[Decimal] = mapped_column(DECIMAL(10,2), default=Decimal("0.00"))
-    delivery_type: Mapped[str] = mapped_column(String, default="pickup")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
-class Reservacion(Base):
-    __tablename__ = "reservaciones"
-    id_reserva: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    codigo_reserva: Mapped[str] = mapped_column(String, unique=True)
-    estado: Mapped[EstadoReserva] = mapped_column(SAEnum(EstadoReserva, name="estado_reserva", create_type=False), default=EstadoReserva.pendiente)
-    fecha_reserva: Mapped[date] = mapped_column(Date)
-    hora_reserva: Mapped[datetime_time] = mapped_column(Time)
-    num_personas: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-
-# ==========================================================
-# 🛠️ DEPENDENCIES & HELPERS
-# ==========================================================
-async def get_db() -> AsyncSession:
-    if not async_session_maker: raise HTTPException(500, "DB offline")
-    async with async_session_maker() as session:
-        try: yield session; await session.commit()
-        except Exception: await session.rollback(); raise
-
-async def get_tenant(api_key: str = Header(..., alias="X-Restaurant-API-Key"), db: AsyncSession = Depends(get_db)) -> Restaurante:
-    if not api_key: raise HTTPException(401, "Missing API Key")
-    res = await db.execute(
-        select(Restaurante)
-        .join(RestauranteApiKey, RestauranteApiKey.id_restaurante == Restaurante.id_restaurante)
-        .join(ApiKey, ApiKey.id_api_key == RestauranteApiKey.id_api_key)
-        .where(ApiKey.api_key == api_key, Restaurante.activo == True, ApiKey.activo == True)
-    )
-    rest = res.scalar_one_or_none()
-    if not rest: raise HTTPException(403, "API Key inválida o restaurante inactivo")
-    return rest
-
-async def send_wa(phone: str, text: str):
-    # ✅ BLINDAJE HEADER: nunca enviar "Bearer " vacío
-    if not WA_PHONE_ID or not WA_TOKEN: return logger.info(f"[SIM-WA] {phone}: {text}")
-    url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
-    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messaging_product":"whatsapp","to":phone,"type":"text","text":{"body": text[:1600]}}
+async def send_msg(to: str, msg: str) -> bool:
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID: return False
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.post(url, json=payload, headers=headers)
-            if r.status_code != 200: logger.error(f"WA Error {r.status_code}: {r.text[:200]}")
-    except Exception as e: logger.error(f"WA Exception: {e}")
+            r = await c.post(f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+                headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"},
+                json={"messaging_product":"whatsapp","to":to,"type":"text","text":{"body":msg[:1600]}})
+            return r.status_code == 200
+    except: return False
 
-rate_limits: Dict[str, List[float]] = defaultdict(list)
-def check_rate_limit(ip: str) -> bool:
-    now = time_module.time()
-    rate_limits[ip] = [t for t in rate_limits[ip] if t > now - 60]
-    if len(rate_limits[ip]) >= 100: return False
-    rate_limits[ip].append(now)
-    return True
+# ========== FLUJO PRINCIPAL ==========
+async def process_msg(body: dict):
+    if body.get("object") != "whatsapp_business_account": return
+    for entry in body.get("entry", []):
+        for ch in entry.get("changes", []):
+            val = ch.get("value", {})
+            cid = "44444444-4444-4444-4444-444444444444" # Fallback client_id
+            for msg in val.get("messages", []):
+                if msg.get("type") != "text": continue
+                uid, txt = msg.get("from"), msg["text"]["body"].strip()
+                tl = txt.lower()
+                lang = user_lang.get(uid, "spanish")
+                fase = pedido_estado.get(uid, {}).get("fase", "inicio")
 
-# ==========================================================
-# 🤖 WEBHOOK & BOT LOGIC
-# ==========================================================
-async def process_wa_message(payload: dict):
-    try:
-        entry = payload["entry"][0]
-        change = entry["changes"][0]
-        msg_data = change["value"].get("messages", [{}])[0]
-        if not msg_data or msg_data.get("type") != "text": return
+                # 1️⃣ RESET
+                if tl in ['q','salir','exit','reiniciar']:
+                    carts.pop(uid, None); pedido_estado.pop(uid, None)
+                    pedido_estado[uid] = {"fase":"lang"}
+                    await send_msg(uid, "🌍 *Idioma*\n1. 🇪🇸 2. 🇬🇧 3. 🇫🇷 4. 🇲🇦 5. 🇸🇦"); continue
 
-        phone = msg_data["from"]
-        text = msg_data["text"]["body"].strip().lower()
-        if not async_session_maker: return
-        async with async_session_maker() as db:
-            rest_res = await db.execute(select(Restaurante).where(Restaurante.activo == True).limit(1))
-            rest = rest_res.scalar_one_or_none()
-            if not rest: return
-            rest_id = rest.id_restaurante
+                # 2️⃣ FASES
+                if fase == "lang":
+                    m = {'1':'spanish','2':'english','3':'french','4':'darija','5':'arabic'}
+                    if txt in m:
+                        user_lang[uid] = m[txt]; pedido_estado.pop(uid, None)
+                        await send_msg(uid, f"👋 Hola! Escribe *m* para menú, *c* para confirmar, *q* salir.")
+                    else: await send_msg(uid, "❌ 1-5"); continue
+                if fase == "entrega":
+                    if tl=='1': pedido_estado[uid].update({"tipo":"recoger","fase":"pago"}); await send_msg(uid, "💳 *Pago*\n1. Efectivo 2. Tarjeta 3. Transferencia")
+                    elif tl=='2': pedido_estado[uid].update({"tipo":"domicilio","fase":"dir"}); await send_msg(uid, "📍 Dirección:")
+                    else: await send_msg(uid, "❌ 1 o 2"); continue
+                if fase == "dir":
+                    pedido_estado[uid].update({"direccion":txt,"fase":"pago"}); await send_msg(uid, "💳 *Pago*\n1. Efectivo 2. Tarjeta 3. Transferencia"); continue
+                if fase == "pago":
+                    total = sum(i["price"] for i in carts.get(uid,[]))
+                    if tl=='1': pedido_estado[uid].update({"met":"efectivo","fase":"bill"}); await send_msg(uid, "💵 ¿Billete? (Ej: 100)")
+                    elif tl=='2':
+                        res = await save_order(uid, total, pedido_estado[uid].get("tipo","recoger"), pedido_estado[uid].get("direccion",""), "tarjeta")
+                        carts.pop(uid, None); pedido_estado.pop(uid, None)
+                        await send_msg(uid, f"✅ Pedido {res['numero']} (Tarjeta).")
+                    elif tl=='3':
+                        res = await save_order(uid, total, "recoger", "", "transferencia")
+                        carts.pop(uid, None); pedido_estado.pop(uid, None)
+                        await send_msg(uid, f"✅ Pedido {res['numero']} (Transferencia pendiente).")
+                    else: await send_msg(uid, "❌ 1-3"); continue
+                if fase == "bill":
+                    total = sum(i["price"] for i in carts.get(uid,[]))
+                    res = await save_order(uid, total, pedido_estado[uid].get("tipo","recoger"), pedido_estado[uid].get("direccion",""), f"efectivo({txt})")
+                    carts.pop(uid, None); pedido_estado.pop(uid, None)
+                    await send_msg(uid, f"✅ Pedido {res['numero']} (Efectivo: {txt})."); continue
+                if fase == "res_pax":
+                    if tl.isdigit() and 1<=int(tl)<=50: pedido_estado[uid]["pax"]=int(tl); pedido_estado[uid]["fase"]="res_time"; await send_msg(uid, "📅 Día y hora (Ej: Mañana 20:00)"); continue
+                if fase == "res_time":
+                    pedido_estado.pop(uid, None); await send_msg(uid, f"✅ Reserva para {pedido_estado.get(uid,{}).get('pax','?')} personas registrada."); continue
 
-            cl_res = await db.execute(select(Cliente).where(Cliente.wa_id == phone))
-            cliente = cl_res.scalar_one_or_none()
-            if not cliente:
-                cliente = Cliente(id_restaurante=rest_id, wa_id=phone, telefono=phone)
-                db.add(cliente); await db.flush()
+                # 3️⃣ COMANDOS
+                if tl in ['hola','hello','salam']:
+                    carts.pop(uid, None); pedido_estado.pop(uid, None)
+                    pedido_estado[uid] = {"fase":"lang"}
+                    await send_msg(uid, "🌍 *Idioma*\n1. 🇪🇸 2. 🇬🇧 3. 🇫🇷 4. 🇲🇦 5. 🇸🇦"); continue
+                if tl in ['m','menu']:
+                    m1, _, m2 = await get_menu(cid, lang); await send_msg(uid, m1)
+                    if m2: await send_msg(uid, m2); continue
+                if tl in ['v','pedido']:
+                    await send_msg(uid, await get_cart(uid, lang)); continue
+                if tl in ['c','confirmar']:
+                    if not carts.get(uid) or sum(i['price'] for i in carts[uid])==0: await send_msg(uid, "⚠️ Vacío. Escribe *m*.")
+                    else: pedido_estado[uid]={"fase":"entrega"}; await send_msg(uid, "🚚 *Entrega*\n1. Recoger 2. Domicilio")
+                    continue
+                if tl in ['r','reservar']:
+                    pedido_estado[uid]={"fase":"res_pax"}; await send_msg(uid, "👥 ¿Cuántas personas? (1-50)"); continue
+                if tl.isdigit():
+                    await send_msg(uid, await add_to_cart(uid, int(tl), cid, lang)); continue
+                await send_msg(uid, "❓ *m* menú | *v* pedido | *c* confirmar | *r* reservar | *q* salir")
 
-            conv_res = await db.execute(select(Conversacion).where(Conversacion.id_cliente == cliente.id_cliente).order_by(Conversacion.last_message_at.desc()).limit(1))
-            conv = conv_res.scalar_one_or_none()
-            if not conv:
-                conv = Conversacion(id_cliente=cliente.id_cliente, id_restaurante=rest_id, contexto_bot={"fase": "inicio", "carrito": []})
-                db.add(conv); await db.flush()
-
-            ctx = conv.contexto_bot or {"fase": "inicio", "carrito": []}
-            db.add(Mensaje(id_conversacion=conv.id_conversacion, direccion="inbound", contenido=text))
-            reply = "🤔 Usa: `m` menú, `v` pedido, `c` confirmar, `r` reservar, `q` salir"
-
-            if text in ("q", "salir", "reset"):
-                ctx = {"fase": "inicio", "carrito": []}; reply = "🔄 Sesión reiniciada."
-            elif text in ("m", "menu", "0"):
-                ctx["fase"] = "menu"; reply = "📋 *MENÚ*\n1. Tajín Pollo (70)\n2. Cuscús (80)\n3. Pastilla (90)\n4. Té (15)\nResponde con número."
-            elif text in ("v", "pedido"):
-                cart = ctx.get("carrito", [])
-                reply = "🛒 Carrito vacío." if not cart else "🛒 *PEDIDO*\n" + "\n".join([f"• {i['nombre']} x{i.get('cant',1)}" for i in cart])
-            elif text in ("c", "confirm"):
-                cart = ctx.get("carrito", [])
-                if not cart: reply = "⚠️ Vacío."
-                else:
-                    total = sum(i.get("precio",0) * i.get("cant",1) for i in cart)
-                    ped = Pedido(id_restaurante=rest_id, id_cliente=cliente.id_cliente, items=cart, total=Decimal(str(total)))
-                    db.add(ped); await db.flush()
-                    ctx["carrito"] = []; ctx["fase"] = "inicio"
-                    reply = f"✅ Guardado. ID: {str(ped.id_pedido)[-6:].upper()}"
-            elif text.isdigit():
-                idx = int(text)-1
-                platos = [{"nombre":"Tajín Pollo","precio":70},{"nombre":"Cuscús","precio":80},{"nombre":"Pastilla","precio":90},{"nombre":"Té","precio":15}]
-                if 0 <= idx < len(platos):
-                    ctx.setdefault("carrito", []).append(platos[idx])
-                    reply = f"✅ {platos[idx]['nombre']} añadido. Escribe `v`."
-            elif text == "r" or text == "reservar":
-                ctx["fase"] = "res_p"; reply = "👥 ¿Cuántas personas?"
-            elif ctx.get("fase") == "res_p" and text.isdigit():
-                ctx["temp"] = {"p": int(text)}; ctx["fase"] = "res_t"; reply = "🕒 Día/Hora (DD-MM-AAAA HH:MM):"
-            elif ctx.get("fase") == "res_t":
-                try:
-                    dt = datetime.strptime(text, "%d-%m-%Y %H:%M")
-                    code = f"RES-{date.today().strftime('%y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
-                    res = Reservacion(id_restaurante=rest_id, id_cliente=cliente.id_cliente, codigo_reserva=code, estado=EstadoReserva.pendiente, fecha_reserva=dt.date(), hora_reserva=dt.time(), num_personas=ctx["temp"]["p"])
-                    db.add(res); await db.flush()
-                    reply = f"📅 Confirmada. Código: {code}"; ctx["fase"] = "inicio"
-                except: reply = "📅 Formato: DD-MM-AAAA HH:MM"
-
-            conv.contexto_bot = ctx
-            await db.commit()
-            await send_wa(phone, reply)
-    except Exception as e: logger.error(f"Webhook err: {e}")
-
-# ==========================================================
-# 🌐 APP & ROUTES
-# ==========================================================
-app = FastAPI(title="Orquestrator ISA", version="9.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET, https_only=False)
-
+# ========== ENDPOINTS ==========
 @app.get("/health")
-def health(): return {"status":"ok","db":"online" if engine else "offline","wa":"configured" if WA_PHONE_ID else "missing"}
-
+async def health(): return {"status":"ok","version":VERSION}
 @app.get("/api/whatsapp/webhook")
-def wb_verify(req: Request):
-    if req.query_params.get("hub.mode")=="subscribe" and req.query_params.get("hub.verify_token")==WEBHOOK_VERIFY:
-        return JSONResponse(content=int(req.query_params.get("hub.challenge","0")), status_code=200)
-    return JSONResponse(status_code=403)
-
+async def wb_get(req: Request):
+    p = req.query_params
+    if p.get("hub.mode")=="subscribe" and p.get("hub.verify_token")==VERIFY_TOKEN:
+        return PlainTextResponse(p.get("hub.challenge"))
+    raise HTTPException(403)
 @app.post("/api/whatsapp/webhook")
 async def wb_post(req: Request, bg: BackgroundTasks):
-    if not check_rate_limit(req.client.host): return JSONResponse(status_code=429)
-    try:
-        bg.add_task(process_wa_message, await req.json())
-        return JSONResponse(status_code=200)
-    except: return JSONResponse(status_code=500)
-
-@app.get("/api/v1/pedidos/activos")
-async def get_pedidos(db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
-    res = await db.execute(select(Pedido).where(Pedido.id_restaurante == rest.id_restaurante, Pedido.estado.in_([EstadoPedido.pendiente, EstadoPedido.confirmado])).order_by(Pedido.created_at.desc()))
-    return [{"id":str(p.id_pedido)[:8], "total":float(p.total), "estado":p.estado.value} for p in res.scalars().all()]
-
-@app.get("/api/v1/reservaciones/hoy")
-async def get_reservas(db: AsyncSession = Depends(get_db), rest: Restaurante = Depends(get_tenant)):
-    res = await db.execute(select(Reservacion).where(Reservacion.id_restaurante == rest.id_restaurante, Reservacion.fecha_reserva == date.today()))
-    return [{"codigo":r.codigo_reserva, "personas":r.num_personas, "hora":r.hora_reserva.isoformat(), "estado":r.estado.value} for r in res.scalars().all()]
-
-HTML_LOGIN = """<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex h-screen items-center justify-center">
-<div class="bg-white p-8 rounded shadow-md w-96"><h1 class="text-2xl font-bold mb-4">🔐 Panel</h1>
-<form action="/panel/login" method="post"><input type="password" name="api_key" placeholder="API Key" class="w-full p-2 border rounded mb-4"><button type="submit" class="w-full bg-blue-600 text-white p-2 rounded">Entrar</button></form>
-<p class="text-red-500 mt-2 text-sm">{error}</p></div></body></html>"""
-
-HTML_RECEPCION = """<!DOCTYPE html><html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 p-6">
-<h1 class="text-2xl font-bold mb-6">📊 Recepción</h1>
-<div class="grid grid-cols-2 gap-6"><div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-bold mb-2">📅 Reservas Hoy <span id="rc" class="bg-blue-100 text-blue-800 px-2 py-1 rounded">0</span></h2><div id="res" class="text-gray-500">Cargando...</div></div>
-<div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-bold mb-2">🛒 Pedidos <span id="pc" class="bg-green-100 text-green-800 px-2 py-1 rounded">0</span></h2><div id="ped" class="text-gray-500">Cargando...</div></div></div>
-<script>const r=()=>{fetch('/api/v1/reservaciones/hoy').then(x=>x.json()).then(d=>{document.getElementById('rc').textContent=d.length;document.getElementById('res').innerHTML=d.map(x=>`<div class="border-b p-2">${x.codigo} | ${x.personas}pax | ${x.hora} | ${x.estado}</div>`).join('')||'Sin reservas';});fetch('/api/v1/pedidos/activos').then(x=>x.json()).then(d=>{document.getElementById('pc').textContent=d.length;document.getElementById('ped').innerHTML=d.map(x=>`<div class="border-b p-2">${x.id} | ${x.total} | ${x.estado}</div>`).join('')||'Sin pedidos';});};setInterval(r,30000);r();</script></body></html>"""
-
-@app.get("/panel/login") def panel_login(error=""): return HTMLResponse(content=HTML_LOGIN.format(error=error))
-@app.post("/panel/login") async def panel_post(request: Request, api_key: str = Form(...), db: AsyncSession = Depends(get_db)):
-    try:
-        rest = await get_tenant(api_key, db)
-        request.session["rest_id"] = str(rest.id_restaurante); request.session["api_key"] = api_key
-        return RedirectResponse("/panel/recepcion", status_code=303)
-    except HTTPException: return panel_login(error="Clave inválida")
-@app.get("/panel/recepcion") def panel_recep(request: Request):
-    if "api_key" not in request.session: return RedirectResponse("/panel/login")
-    return HTMLResponse(content=HTML_RECEPCION)
-
-# ==========================================================
-# 🚀 STARTUP
-# ==========================================================
+    try: bg.add_task(process_msg, await req.json()); return {"status":"ok"}
+    except: return {"status":"error"}, 500
+@app.on_event("startup")
+async def startup(): logger.info("🚀 Bot iniciado.")
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)), workers=1)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)), reload=False)
+
