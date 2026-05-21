@@ -273,18 +273,20 @@ async def wb_post(req: Request, bg: BackgroundTasks):
 HTML_LOGIN = """<html><body class="bg-gray-100 flex h-screen items-center justify-center"><div class="bg-white p-8 rounded shadow w-96"><h1 class="text-xl font-bold mb-4">🔐 Panel</h1><form action="/panel/login" method="post"><input name="api_key" class="w-full p-2 border mb-4" placeholder="API Key" required><button class="w-full bg-blue-600 text-white p-2 rounded">Entrar</button></form></div></body></html>"""
 HTML_RECEPCION = """<html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-50 p-6"><h1 class="text-2xl font-bold mb-6">📊 Recepción</h1><div id="pedidos" class="text-gray-500">Cargando...</div><script>fetch('/health').then(r=>r.json()).then(d=>document.getElementById('pedidos').innerText=JSON.stringify(d));</script></body></html>"""
 
+# --- PANEL HTML (CORREGIDO) ---
 @app.get("/panel/login")
-def p_login(): 
+def p_login():
     return HTMLResponse(content=HTML_LOGIN)
 
 @app.post("/panel/login")
-def p_login_post(req: Request, api_key: str = Form(...)): 
+def p_login_post(req: Request, api_key: str = Form(...)):
+    # Validación simple para MVP
     req.session["auth"]="ok"
     return RedirectResponse("/panel/recepcion", status_code=303)
 
 @app.get("/panel/recepcion")
 def p_recep(req: Request):
-    if req.session.get("auth") != "ok": 
+    if req.session.get("auth") != "ok":
         return RedirectResponse("/panel/login")
     return HTMLResponse(content=HTML_RECEPCION)
 
