@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-🏗️ ORQUESTRATOR ISA v12.3-STABLE
+🏗️ ORQUESTRATOR ISA v13.0-STABLE
 Stack: FastAPI + SQLAlchemy 2.0 (psycopg) + Neon DB + WhatsApp Cloud API
-Fixes: Duplicados eliminados, Sintaxis corregida, Persistencia de estado.
+Fixes: Carrito persiste, timezone-aware, flujo reservas corregido,
+       selector idiomas, eliminar items, rate limiting básico.
 """
 
 import os
 import uuid
 import httpx
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from decimal import Decimal
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Form
+from fastapi import FastAPI, BackgroundTasks, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -22,7 +23,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import Enum as SAEnum, String, Boolean, DECIMAL, DateTime, select
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
+# ═══════════════════════════════════════════════════════════════════
 # 🔧 CONFIGURACIÓN SEGURA
+# ═══════════════════════════════════════════════════════════════════
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -42,7 +45,9 @@ if not WA_TOKEN:
 if not WA_PHONE_ID:
     logger.warning("⚠️ PHONE_NUMBER_ID vacío. Webhook deshabilitado.")
 
+# ═══════════════════════════════════════════════════════════════════
 # 🗄️ ENGINE DB (NEON + POOL SEGURO)
+# ═══════════════════════════════════════════════════════════════════
 engine = None
 async_session_maker = None
 
@@ -51,9 +56,11 @@ if DATABASE_URL:
     if "postgresql://" in DATABASE_URL and "psycopg" not in DATABASE_URL:
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
-    # Pool settings para evitar SSL connection closed
     engine = create_async_engine(
-        DATABASE_URL, pool_pre_ping=True, pool_recycle=300, echo=False
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        echo=False,
     )
     async_session_maker = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
@@ -65,7 +72,9 @@ class Base(DeclarativeBase):
     pass
 
 
-# 📦 MODELOS (ENUMS CORRECTOS: 1 MIEMBRO POR LÍNEA)
+# ═══════════════════════════════════════════════════════════════════
+# 📦 MODELOS
+# ═══════════════════════════════════════════════════════════════════
 class EstadoPedido(str, Enum):
     pendiente = "pendiente"
     confirmado = "confirmado"
@@ -77,6 +86,7 @@ class EstadoReserva(str, Enum):
     pendiente = "pendiente"
     confirmada = "confirmada"
     cancelada = "cancelada"
+    completada = "completada"
 
 
 class Restaurante(Base):
@@ -96,6 +106,7 @@ class Cliente(Base):
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     wa_id: Mapped[str] = mapped_column(String, unique=True)
     telefono: Mapped[str] = mapped_column(String)
+    language_pref: Mapped[str] = mapped_column(String, default="es")
 
 
 class Conversacion(Base):
@@ -107,7 +118,8 @@ class Conversacion(Base):
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     contexto_bot: Mapped[dict] = mapped_column(JSONB, default=dict)
     last_message_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -119,32 +131,54 @@ class Pedido(Base):
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     estado: Mapped[EstadoPedido] = mapped_column(
-        SAEnum(EstadoPedido, name="estado_pedido", create_type=False),
+        SAEnum(
+            EstadoPedido,
+            name="estado_pedido",
+            create_type=False,
+        ),
         default=EstadoPedido.pendiente,
     )
     items: Mapped[list] = mapped_column(JSONB, default=list)
     total: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), default=Decimal("0.00"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
+class Reserva(Base):
+    __tablename__ = "reservas"
+    id_reserva: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    codigo: Mapped[str] = mapped_column(String)
+    num_personas: Mapped[int] = mapped_column(Integer, default=1)
+    fecha_reserva: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    estado: Mapped[EstadoReserva] = mapped_column(
+        SAEnum(
+            EstadoReserva,
+            name="estado_reserva",
+            create_type=False,
+        ),
+        default=EstadoReserva.pendiente,
+    )
+    notas: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 🛠️ HELPERS
-async def get_db() -> AsyncSession:
-    if not async_session_maker:
-        raise HTTPException(500, "DB offline")
-    async with async_session_maker() as session:
-        try:
-            yield session
-            await session.commit()
-        except:
-            await session.rollback()
-            raise
-
-
+# ═══════════════════════════════════════════════════════════════════
 async def send_wa(phone: str, text: str):
+    """Envía mensaje por WhatsApp Cloud API o simula en modo DEMO."""
     if not WA_PHONE_ID or not WA_TOKEN:
-        return logger.info(f"[SIM-WA] {phone}: {text}")
+        logger.info(f"[SIM-WA] {phone}: {text}")
+        return
     url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WA_TOKEN}",
@@ -163,8 +197,153 @@ async def send_wa(phone: str, text: str):
         logger.error(f"WA Ex: {e}")
 
 
+def now_utc() -> datetime:
+    """Retorna datetime timezone-aware en UTC."""
+    return datetime.now(timezone.utc)
+
+
+# ── RATE LIMITING BÁSICO (en memoria) ────────────────────────────
+_rate_limits: dict = {}
+
+
+def check_rate_limit(ip: str, max_req: int = 100, window_sec: int = 60) -> bool:
+    """Retorna True si el IP está dentro del límite."""
+    now = now_utc()
+    if ip not in _rate_limits:
+        _rate_limits[ip] = []
+    # Limpiar entradas antiguas
+    _rate_limits[ip] = [
+        t for t in _rate_limits[ip] if (now - t).total_seconds() < window_sec
+    ]
+    if len(_rate_limits[ip]) >= max_req:
+        return False
+    _rate_limits[ip].append(now)
+    return True
+
+
+# ── TRADUCCIONES ─────────────────────────────────────────────────
+I18N = {
+    "es": {
+        "welcome": (
+            "🌍 Bienvenido a {restaurante}\n"
+            "Elige tu idioma:\n"
+            "1. 🇪🇸 Español\n"
+            "2. 🇬🇧 English\n"
+            "3. 🇫🇷 Français\n"
+            "4. 🇲🇦 الدارجة\n"
+            "5. 🇸🇦 العربية\n"
+            "6. 🇹🇷 Türkçe\n"
+            "7. 🇩🇪 Deutsch"
+        ),
+        "menu": (
+            "📋 *MENÚ*\n"
+            "1. Tajín (70 MAD)\n"
+            "2. Cuscús (80 MAD)\n"
+            "3. Harira (35 MAD)\n"
+            "4. Pastilla (120 MAD)\n"
+            "\nResponde nº para añadir"
+        ),
+        "added": "✅ {plato} añadido. Total: {total} MAD.",
+        "cart": ("🛒 *PEDIDO*\n{items}\n💰 Total: {total} MAD"),
+        "cart_empty": "🛒 Carrito vacío.",
+        "confirm": "✅ Pedido guardado! ID: {id_pedido}",
+        "confirm_empty": "⚠️ Carrito vacío. Nada que confirmar.",
+        "removed": "🗑️ {plato} eliminado. Total: {total} MAD.",
+        "invalid": "❌ Nº inválido.",
+        "reset": "🔄 Sesión reiniciada.",
+        "help": (
+            "🤔 *Comandos:*\n"
+            "`m` → Menú\n"
+            "`v` → Ver pedido\n"
+            "`c` → Confirmar\n"
+            "`x N` → Quitar ítem N\n"
+            "`r` → Reservar\n"
+            "`q` → Salir"
+        ),
+        "res_personas": "👥 ¿Cuántas personas? (responde un número)",
+        "res_fecha": ("📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25"),
+        "res_hora": ("🕐 ¿Qué hora? (HH:MM)\nEj: 19:30"),
+        "res_confirm": (
+            "📋 *Reserva*\n"
+            "👥 {personas} personas\n"
+            "📅 {fecha} 🕐 {hora}\n"
+            "\nResponde `si` para confirmar"
+        ),
+        "res_saved": ("✅ Reserva guardada!\nCódigo: {codigo}"),
+        "res_cancel": "❌ Reserva cancelada.",
+    },
+    "en": {
+        "welcome": (
+            "🌍 Welcome to {restaurante}\n"
+            "Choose your language:\n"
+            "1. 🇪🇸 Español\n"
+            "2. 🇬🇧 English\n"
+            "3. 🇫🇷 Français\n"
+            "4. 🇲🇦 الدارجة\n"
+            "5. 🇸🇦 العربية\n"
+            "6. 🇹🇷 Türkçe\n"
+            "7. 🇩🇪 Deutsch"
+        ),
+        "menu": (
+            "📋 *MENU*\n"
+            "1. Tajine (70 MAD)\n"
+            "2. Couscous (80 MAD)\n"
+            "3. Harira (35 MAD)\n"
+            "4. Pastilla (120 MAD)\n"
+            "\nReply number to add"
+        ),
+        "added": "✅ {plato} added. Total: {total} MAD.",
+        "cart": ("🛒 *ORDER*\n{items}\n💰 Total: {total} MAD"),
+        "cart_empty": "🛒 Cart is empty.",
+        "confirm": "✅ Order saved! ID: {id_pedido}",
+        "confirm_empty": "⚠️ Cart empty. Nothing to confirm.",
+        "removed": "🗑️ {plato} removed. Total: {total} MAD.",
+        "invalid": "❌ Invalid number.",
+        "reset": "🔄 Session restarted.",
+        "help": (
+            "🤔 *Commands:*\n"
+            "`m` → Menu\n"
+            "`v` → View order\n"
+            "`c` → Confirm\n"
+            "`x N` → Remove item N\n"
+            "`r` → Reserve\n"
+            "`q` → Quit"
+        ),
+        "res_personas": "👥 How many people? (reply a number)",
+        "res_fecha": ("📅 What date? (YYYY-MM-DD)\nEx: 2026-05-25"),
+        "res_hora": "🕐 What time? (HH:MM)\nEx: 19:30",
+        "res_confirm": (
+            "📋 *Reservation*\n"
+            "👥 {personas} people\n"
+            "📅 {fecha} 🕐 {hora}\n"
+            "\nReply `yes` to confirm"
+        ),
+        "res_saved": ("✅ Reservation saved!\nCode: {codigo}"),
+        "res_cancel": "❌ Reservation cancelled.",
+    },
+}
+
+
+# Fallback a español si no existe traducción
+def t(key: str, lang: str = "es", **kwargs) -> str:
+    text = I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
+    return text.format(**kwargs)
+
+
+# ── PLATOS (pueden venir de DB en v14) ───────────────────────────
+PLATOS = {
+    "1": {"n": "Tajín", "p": 70},
+    "2": {"n": "Cuscús", "p": 80},
+    "3": {"n": "Harira", "p": 35},
+    "4": {"n": "Pastilla", "p": 120},
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 🤖 BOT LOGIC
+# ═══════════════════════════════════════════════════════════════════
 async def process_msg(payload: dict):
+    """Procesa un mensaje entrante de WhatsApp Cloud API."""
     if not async_session_maker:
         return
     try:
@@ -175,7 +354,8 @@ async def process_msg(payload: dict):
             return
 
         phone = msg["from"]
-        txt = msg["text"]["body"].strip().lower()
+        txt_raw = msg["text"]["body"].strip()
+        txt = txt_raw.lower()
 
         async with async_session_maker() as db:
             # 1. Restaurante
@@ -184,14 +364,22 @@ async def process_msg(payload: dict):
             if not rest:
                 return
             rid = rest.id_restaurante
+            rname = rest.nombre
 
             # 2. Cliente
             res_c = await db.execute(select(Cliente).where(Cliente.wa_id == phone))
             cli = res_c.scalar_one_or_none()
             if not cli:
-                cli = Cliente(id_restaurante=rid, wa_id=phone, telefono=phone)
+                cli = Cliente(
+                    id_restaurante=rid,
+                    wa_id=phone,
+                    telefono=phone,
+                    language_pref="es",
+                )
                 db.add(cli)
                 await db.flush()
+
+            lang = cli.language_pref or "es"
 
             # 3. Conversación
             res_v = await db.execute(
@@ -204,90 +392,234 @@ async def process_msg(payload: dict):
                 conv = Conversacion(
                     id_cliente=cli.id_cliente,
                     id_restaurante=rid,
-                    contexto_bot={"fase": "lang", "carrito": []},
+                    contexto_bot={
+                        "fase": "lang",
+                        "carrito": [],
+                        "lang": "es",
+                    },
                 )
                 db.add(conv)
                 await db.flush()
+                await db.refresh(conv)
 
-            ctx = conv.contexto_bot or {"fase": "lang", "carrito": []}
-            reply = "🤔 Usa: `m` menú, `v` pedido, `c` confirmar, `q` salir"
+            # Asegurar estructura mínima del contexto
+            ctx = dict(conv.contexto_bot) if conv.contexto_bot else {}
+            ctx.setdefault("fase", "lang")
+            ctx.setdefault("carrito", [])
+            ctx.setdefault("lang", "es")
 
-            # Lógica de Estados
-            if txt in ("q", "salir"):
-                ctx["fase"] = "lang"
-                ctx["carrito"] = []
-                reply = "🔄 Sesión reiniciada."
+            reply = t("help", lang)
+            fase = ctx.get("fase", "lang")
 
-            elif ctx.get("fase") == "lang" or txt == "1":
-                ctx["fase"] = "menu"
-                reply = "📋 *MENÚ*\n1. Tajín (70)\n2. Cuscús (80)\nResponde nº."
-
-            elif txt in ("m", "menu"):
-                ctx["fase"] = "menu"
-                reply = "📋 *MENÚ*\n1. Tajín (70)\n2. Cuscús (80)\nResponde nº."
-
-            elif txt.isdigit() and ctx.get("fase") == "menu":
-                platos = {"1": {"n": "Tajín", "p": 70}, "2": {"n": "Cuscús", "p": 80}}
-                if txt in platos:
-                    ctx.setdefault("carrito", []).append(platos[txt])
-                    t = sum(i["p"] for i in ctx["carrito"])
-                    reply = f"✅ {platos[txt]['n']} añadido. Total: {t} MAD."
+            # ═══════════════════════════════════════════════════════
+            # FLUJO: SELECCIÓN DE IDIOMA
+            # ═══════════════════════════════════════════════════════
+            if fase == "lang" or txt in ("q", "salir", "quit"):
+                if txt in ("1", "es", "español"):
+                    lang = "es"
+                    ctx["lang"] = "es"
+                    ctx["fase"] = "menu"
+                    cli.language_pref = "es"
+                    reply = t("menu", lang)
+                elif txt in ("2", "en", "english"):
+                    lang = "en"
+                    ctx["lang"] = "en"
+                    ctx["fase"] = "menu"
+                    cli.language_pref = "en"
+                    reply = t("menu", lang)
                 else:
-                    reply = "❌ Nº inválido."
+                    # Mostrar selector de idiomas
+                    reply = t("welcome", lang, restaurante=rname)
 
-            elif txt in ("v", "pedido"):
-                items = ctx.get("carrito", [])
-                if items:
-                    t = sum(i["p"] for i in items)
-                    reply = (
-                        "🛒 *PEDIDO*\n"
-                        + "\n".join([f"• {i['n']}" for i in items])
-                        + f"\n💰 Total: {t} MAD"
+            # ═══════════════════════════════════════════════════════
+            # FLUJO: MENÚ PRINCIPAL
+            # ═══════════════════════════════════════════════════════
+            elif fase == "menu":
+                if txt in ("m", "menu", "menú"):
+                    reply = t("menu", lang)
+
+                elif txt.isdigit():
+                    if txt in PLATOS:
+                        carrito = list(ctx.get("carrito", []))
+                        carrito.append(PLATOS[txt])
+                        ctx["carrito"] = carrito
+                        total = sum(i["p"] for i in carrito)
+                        reply = t(
+                            "added",
+                            lang,
+                            plato=PLATOS[txt]["n"],
+                            total=total,
+                        )
+                    else:
+                        reply = t("invalid", lang)
+
+                elif txt in ("v", "pedido", "view", "order"):
+                    items = ctx.get("carrito", [])
+                    if items:
+                        total = sum(i["p"] for i in items)
+                        items_txt = "\n".join(
+                            [f"• {i['n']} ({i['p']} MAD)" for i in items]
+                        )
+                        reply = t("cart", lang, items=items_txt, total=total)
+                    else:
+                        reply = t("cart_empty", lang)
+
+                elif txt in ("c", "confirm", "confirmar"):
+                    items = ctx.get("carrito", [])
+                    if items:
+                        total = sum(i["p"] for i in items)
+                        ped = Pedido(
+                            id_restaurante=rid,
+                            id_cliente=cli.id_cliente,
+                            items=list(items),
+                            total=Decimal(str(total)),
+                        )
+                        db.add(ped)
+                        await db.flush()
+                        await db.refresh(ped)
+                        reply = t(
+                            "confirm",
+                            lang,
+                            id_pedido=str(ped.id_pedido)[-6:],
+                        )
+                        ctx["carrito"] = []
+                    else:
+                        reply = t("confirm_empty", lang)
+
+                elif txt.startswith("x "):
+                    # Eliminar por índice: x 1, x 2...
+                    parts = txt.split()
+                    if len(parts) == 2 and parts[1].isdigit():
+                        idx = int(parts[1]) - 1
+                        carrito = list(ctx.get("carrito", []))
+                        if 0 <= idx < len(carrito):
+                            removed = carrito.pop(idx)
+                            ctx["carrito"] = carrito
+                            total = sum(i["p"] for i in carrito)
+                            reply = t(
+                                "removed",
+                                lang,
+                                plato=removed["n"],
+                                total=total,
+                            )
+                        else:
+                            reply = t("invalid", lang)
+                    else:
+                        reply = t("invalid", lang)
+
+                elif txt in ("r", "reservar", "reserve"):
+                    ctx["fase"] = "res_p"
+                    reply = t("res_personas", lang)
+
+                elif txt in ("q", "salir", "quit"):
+                    ctx["fase"] = "lang"
+                    ctx["carrito"] = []
+                    reply = t("reset", lang)
+
+                else:
+                    reply = t("help", lang)
+
+            # ═══════════════════════════════════════════════════════
+            # FLUJO: RESERVAS (fase por fase)
+            # ═══════════════════════════════════════════════════════
+            elif fase == "res_p":
+                # Esperando número de personas
+                if txt.isdigit():
+                    ctx["res_personas"] = int(txt)
+                    ctx["fase"] = "res_f"
+                    reply = t("res_fecha", lang)
+                else:
+                    reply = t("res_personas", lang)
+
+            elif fase == "res_f":
+                # Esperando fecha YYYY-MM-DD
+                try:
+                    fecha = datetime.strptime(txt_raw, "%Y-%m-%d")
+                    ctx["res_fecha"] = txt_raw
+                    ctx["fase"] = "res_h"
+                    reply = t("res_hora", lang)
+                except ValueError:
+                    reply = t("res_fecha", lang)
+
+            elif fase == "res_h":
+                # Esperando hora HH:MM
+                try:
+                    datetime.strptime(txt_raw, "%H:%M")
+                    ctx["res_hora"] = txt_raw
+                    ctx["fase"] = "res_c"
+                    reply = t(
+                        "res_confirm",
+                        lang,
+                        personas=ctx.get("res_personas", 1),
+                        fecha=ctx.get("res_fecha", ""),
+                        hora=txt_raw,
                     )
-                else:
-                    reply = "🛒 Carrito vacío."
+                except ValueError:
+                    reply = t("res_hora", lang)
 
-            elif txt in ("c", "confirm"):
-                if ctx.get("carrito"):
-                    total = sum(i["p"] for i in ctx["carrito"])
-                    ped = Pedido(
+            elif fase == "res_c":
+                # Confirmación final
+                if txt in ("si", "yes", "oui", "نعم"):
+                    # Generar código RES-YYYYMMDD-SEC
+                    now = now_utc()
+                    sec = now.second
+                    codigo = f"RES-{now.strftime('%Y%m%d')}-{sec:02d}"
+                    res = Reserva(
                         id_restaurante=rid,
                         id_cliente=cli.id_cliente,
-                        items=ctx["carrito"],
-                        total=Decimal(str(total)),
+                        codigo=codigo,
+                        num_personas=ctx.get("res_personas", 1),
+                        fecha_reserva=datetime.strptime(
+                            f"{ctx['res_fecha']} {ctx['res_hora']}",
+                            "%Y-%m-%d %H:%M",
+                        ).replace(tzinfo=timezone.utc),
+                        estado=EstadoReserva.confirmada,
                     )
-                    db.add(ped)
+                    db.add(res)
                     await db.flush()
-                    reply = f"✅ Guardado! ID: {str(ped.id_pedido)[-6:]}"
-                    ctx["carrito"] = []
+                    reply = t("res_saved", lang, codigo=codigo)
                     ctx["fase"] = "menu"
+                    # Limpiar datos temporales de reserva
+                    for k in ("res_personas", "res_fecha", "res_hora"):
+                        ctx.pop(k, None)
                 else:
-                    reply = "⚠️ Vacío."
+                    reply = t("res_cancel", lang)
+                    ctx["fase"] = "menu"
+                    for k in ("res_personas", "res_fecha", "res_hora"):
+                        ctx.pop(k, None)
 
-            elif txt == "r":
-                ctx["fase"] = "res_p"
-                reply = "👥 ¿Personas?"
-                # Aquí iría la lógica completa de reservas...
-                ctx["fase"] = "menu"  # Simplificado para MVP
+            else:
+                # Estado desconocido, resetear
+                ctx["fase"] = "lang"
+                ctx["carrito"] = []
+                reply = t("reset", lang)
 
-            # ✅ GUARDAR ESTADO EN DB (FIX CRÍTICO)
-            conv.contexto_bot = ctx
-            conv.last_message_at = datetime.utcnow()
+            # ═══════════════════════════════════════════════════════
+            # ✅ PERSISTENCIA OBLIGATORIA
+            # ═══════════════════════════════════════════════════════
+            conv.contexto_bot = dict(ctx)
+            conv.last_message_at = now_utc()
             await db.commit()
             await send_wa(phone, reply)
 
     except Exception as e:
-        logger.error(f"Webhook err: {e}")
+        logger.error(f"Webhook err: {e}", exc_info=True)
 
 
-# 🌐 APP & ROUTES (CORRECTAMENTE EXPANDIDAS)
-app = FastAPI(title="Orquestrator ISA v12.3")
+# ═══════════════════════════════════════════════════════════════════
+# 🌐 APP & ROUTES
+# ═══════════════════════════════════════════════════════════════════
+app = FastAPI(title="Orquestrator ISA v13.0")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "db": "online" if engine else "offline"}
+    return {
+        "status": "ok",
+        "version": "13.0",
+        "db": "online" if engine else "offline",
+    }
 
 
 @app.get("/api/whatsapp/webhook")
@@ -299,19 +631,54 @@ def wb_verify(req: Request):
 
 @app.post("/api/whatsapp/webhook")
 async def wb_post(req: Request, bg: BackgroundTasks):
+    # Rate limiting básico por IP
+    client_ip = req.headers.get("x-forwarded-for", req.client.host) or "unknown"
+    if not check_rate_limit(client_ip.split(",")[0].strip()):
+        return JSONResponse(content={"status": "rate_limited"}, status_code=429)
     bg.add_task(process_msg, await req.json())
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
 
+# ── PANEL ADMIN (básico, expandible a Chart.js en v14) ───────────
+LOGIN_HTML = (
+    "<html><body>"
+    "<h1>🔐 Panel ISA</h1>"
+    "<form action='/panel/login' method='post'>"
+    "<input name='api_key' placeholder='API Key'>"
+    "<button>Entrar</button>"
+    "</form></body></html>"
+)
+
+DASH_HTML = (
+    "<html><head>"
+    "<meta charset='utf-8'>"
+    "<title>ISA Panel</title>"
+    "<style>"
+    "body{font-family:system-ui;margin:2rem;background:#0f172a;color:#fff}"
+    ".card{background:#1e293b;border-radius:12px;padding:1.5rem;margin:1rem 0}"
+    "h1{color:#00e5ff}"
+    "</style>"
+    "</head><body>"
+    "<h1>📊 Orquestrator ISA v13.0</h1>"
+    "<div class='card'><h2>🟢 Operativo</h2>"
+    "<p>Webhook: /api/whatsapp/webhook</p>"
+    "<p>Health: /health</p>"
+    "</div>"
+    "<div class='card'><h2>📈 Métricas (próximamente)</h2>"
+    "<p>Chart.js integration en v14</p>"
+    "</div>"
+    "</body></html>"
+)
+
+
 @app.get("/panel/login")
 def p_login():
-    return HTMLResponse(
-        content="<html><body><form action='/panel/login' method='post'><input name='api_key'><button>Entrar</button></form></body></html>"
-    )
+    return HTMLResponse(content=LOGIN_HTML)
 
 
 @app.post("/panel/login")
 def p_login_post(req: Request, api_key: str = Form(...)):
+    # En producción validar contra hash seguro
     req.session["auth"] = "ok"
     return RedirectResponse("/panel/recepcion", status_code=303)
 
@@ -320,11 +687,12 @@ def p_login_post(req: Request, api_key: str = Form(...)):
 def p_recep(req: Request):
     if req.session.get("auth") != "ok":
         return RedirectResponse("/panel/login")
-    return HTMLResponse(
-        content="<html><body><h1>📊 Panel</h1><p>Operativo.</p></body></html>"
-    )
+    return HTMLResponse(content=DASH_HTML)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 🚀 ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import uvicorn
 
