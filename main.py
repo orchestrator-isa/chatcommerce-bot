@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-🏗️ ORQUESTRATOR ISA v13.2-STABLE
+🏗️ ORQUESTRATOR ISA v13.4-FINAL
 Stack: FastAPI + SQLAlchemy 2.0 (psycopg) + Neon DB + WhatsApp Cloud API
-Fixes: Menú Restinga paginado (8 platos/página), 5 idiomas, 5 categorías.
+Menú Restinga: 86 platos, 5 idiomas (ES/EN/FR/AR/Darija), paginado 35+8.
 """
 
 import os
@@ -17,13 +17,16 @@ from fastapi import FastAPI, BackgroundTasks, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from sqlalchemy.ext.asyncio import (
-    create_async_engine, AsyncSession, async_sessionmaker
-)
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import (
-    Enum as SAEnum, String, Boolean, DECIMAL, DateTime,
-    Integer, select
+    Enum as SAEnum,
+    String,
+    Boolean,
+    DECIMAL,
+    DateTime,
+    Integer,
+    select,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
@@ -37,9 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger("orquestrator_bot")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-PANEL_SECRET = os.getenv(
-    "PANEL_SESSION_SECRET", "fallback_secret_2026"
-).strip()
+PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
 WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
 WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", "").strip()
@@ -58,13 +59,8 @@ engine = None
 async_session_maker = None
 
 if DATABASE_URL:
-    if (
-        "postgresql://" in DATABASE_URL
-        and "psycopg" not in DATABASE_URL
-    ):
-        DATABASE_URL = DATABASE_URL.replace(
-            "postgresql://", "postgresql+psycopg://", 1
-        )
+    if "postgresql://" in DATABASE_URL and "psycopg" not in DATABASE_URL:
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
     engine = create_async_engine(
         DATABASE_URL,
@@ -113,14 +109,10 @@ class Cliente(Base):
     id_cliente: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     wa_id: Mapped[str] = mapped_column(String, unique=True)
     telefono: Mapped[str] = mapped_column(String)
-    language_pref: Mapped[str] = mapped_column(
-        String, default="es"
-    )
+    language_pref: Mapped[str] = mapped_column(String, default="es")
 
 
 class Conversacion(Base):
@@ -128,12 +120,8 @@ class Conversacion(Base):
     id_conversacion: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    id_cliente: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
+    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     contexto_bot: Mapped[dict] = mapped_column(JSONB, default=dict)
     last_message_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -146,12 +134,8 @@ class Pedido(Base):
     id_pedido: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
-    id_cliente: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     estado: Mapped[EstadoPedido] = mapped_column(
         SAEnum(
             EstadoPedido,
@@ -161,9 +145,7 @@ class Pedido(Base):
         default=EstadoPedido.pendiente,
     )
     items: Mapped[list] = mapped_column(JSONB, default=list)
-    total: Mapped[Decimal] = mapped_column(
-        DECIMAL(10, 2), default=Decimal("0.00")
-    )
+    total: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), default=Decimal("0.00"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -175,18 +157,12 @@ class Reservacion(Base):
     id_reserva: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    id_restaurante: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
-    id_cliente: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True)
-    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    id_cliente: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     id_conversacion: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), nullable=True
     )
-    codigo_reserva: Mapped[str] = mapped_column(
-        String, unique=True, nullable=False
-    )
+    codigo_reserva: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     estado: Mapped[EstadoReserva] = mapped_column(
         SAEnum(
             EstadoReserva,
@@ -198,21 +174,11 @@ class Reservacion(Base):
     fecha_reserva: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    hora_reserva: Mapped[str] = mapped_column(
-        String, nullable=False
-    )
-    num_personas: Mapped[int] = mapped_column(
-        Integer, default=1, nullable=False
-    )
-    mesa_asignada: Mapped[str] = mapped_column(
-        String, default="", nullable=True
-    )
-    zona: Mapped[str] = mapped_column(
-        String, default="", nullable=True
-    )
-    ai_confirmada: Mapped[bool] = mapped_column(
-        Boolean, default=False
-    )
+    hora_reserva: Mapped[str] = mapped_column(String, nullable=False)
+    num_personas: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    mesa_asignada: Mapped[str] = mapped_column(String, default="", nullable=True)
+    zona: Mapped[str] = mapped_column(String, default="", nullable=True)
+    ai_confirmada: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -232,10 +198,7 @@ async def send_wa(phone: str, text: str):
     if not WA_PHONE_ID or not WA_TOKEN:
         logger.info(f"[SIM-WA] {phone}: {text}")
         return
-    url = (
-        f"https://graph.facebook.com/v18.0/"
-        f"{WA_PHONE_ID}/messages"
-    )
+    url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WA_TOKEN}",
         "Content-Type": "application/json",
@@ -262,17 +225,13 @@ def now_utc() -> datetime:
 _rate_limits: dict = {}
 
 
-def check_rate_limit(
-    ip: str, max_req: int = 100, window_sec: int = 60
-) -> bool:
+def check_rate_limit(ip: str, max_req: int = 100, window_sec: int = 60) -> bool:
     """Retorna True si el IP está dentro del límite."""
     now = now_utc()
     if ip not in _rate_limits:
         _rate_limits[ip] = []
     _rate_limits[ip] = [
-        t
-        for t in _rate_limits[ip]
-        if (now - t).total_seconds() < window_sec
+        t for t in _rate_limits[ip] if (now - t).total_seconds() < window_sec
     ]
     if len(_rate_limits[ip]) >= max_req:
         return False
@@ -281,148 +240,533 @@ def check_rate_limit(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 🍽️ MENÚ RESTINGA (estructurado por categorías)
+# 🍽️ MENÚ RESTINGA — 86 platos, 5 idiomas, 5 categorías
 # ═══════════════════════════════════════════════════════════════════
-# Cada plato: k=código, n=nombre, p=precio MAD, c=categoría idx
+# Estructura: (código, nombre, precio, categoría_idx)
+# Categorías: 0=Entrantes, 1=Carnes, 2=Pescados, 3=Bebidas, 4=Postres
 
-MENU_RESTINGA = {
+_MENU_DATA = {
     "es": {
         "cats": [
-            "🥗 Entrantes / Tapas",
-            "🥘 Carnes / Especialidades",
-            "🐟 Pescados y Mariscos",
+            "🥗 Entrantes",
+            "🥘 Carnes",
+            "🐟 Pescados",
             "🍹 Bebidas",
             "🍰 Postres",
         ],
         "items": [
-            {"k": "1", "n": "Ensalada mezclada", "p": 40, "c": 0},
-            {"k": "2", "n": "Ensalada rusa", "p": 35, "c": 0},
-            {"k": "3", "n": "Ensalada marroquí", "p": 35, "c": 0},
-            {"k": "4", "n": "Ensalada tropical", "p": 45, "c": 0},
-            {"k": "5", "n": "Ensalada Restinga", "p": 65, "c": 0},
-            {"k": "6", "n": "Sopa de verduras", "p": 35, "c": 0},
-            {"k": "7", "n": "Sopa de pescado", "p": 45, "c": 0},
-            {"k": "8", "n": "Concha fina", "p": 60, "c": 0},
-            {"k": "9", "n": "Anchoas marinadas", "p": 50, "c": 0},
-            {"k": "10", "n": "Sopa del día", "p": 35, "c": 0},
-            {"k": "11", "n": "Croquetas", "p": 45, "c": 0},
-            {"k": "12", "n": "Huevo con papas fritas", "p": 40, "c": 0},
-            {"k": "13", "n": "Tortilla española", "p": 45, "c": 0},
-            {"k": "14", "n": "Tortilla francesa", "p": 40, "c": 0},
-            {"k": "15", "n": "Papas fritas", "p": 25, "c": 0},
-            {"k": "16", "n": "Espaguetis", "p": 55, "c": 0},
-            {"k": "17", "n": "Espaguetis con mariscos", "p": 75, "c": 0},
-            {"k": "18", "n": "Espaguetis a la boloñesa", "p": 65, "c": 0},
-            {"k": "19", "n": "Camarones al ajillo", "p": 75, "c": 0},
-            {"k": "20", "n": "Tortilla de atún", "p": 60, "c": 0},
-            {"k": "21", "n": "Cuscús de carne", "p": 80, "c": 1},
-            {"k": "22", "n": "Cuscús de pollo", "p": 70, "c": 1},
-            {"k": "23", "n": "Cuscús de verduras", "p": 65, "c": 1},
-            {"k": "24", "n": "Tajín de carne", "p": 85, "c": 1},
-            {"k": "25", "n": "Tajín de pollo", "p": 70, "c": 1},
-            {"k": "26", "n": "Tajín de carne picada", "p": 75, "c": 1},
-            {"k": "27", "n": "Tajín de hígado", "p": 95, "c": 1},
-            {"k": "28", "n": "Pastilla de pollo", "p": 90, "c": 1},
-            {"k": "29", "n": "Brocheta de carne", "p": 80, "c": 1},
-            {"k": "30", "n": "Brocheta de pollo", "p": 70, "c": 1},
-            {"k": "31", "n": "Kebab mixto", "p": 85, "c": 1},
-            {"k": "32", "n": "Brocheta carne picada", "p": 75, "c": 1},
-            {"k": "33", "n": "Filete de res", "p": 110, "c": 1},
-            {"k": "34", "n": "Filete de pollo", "p": 70, "c": 1},
-            {"k": "35", "n": "Filete pollo champiñones", "p": 80, "c": 1},
-            {"k": "36", "n": "Filete de hígado", "p": 95, "c": 1},
-            {"k": "37", "n": "Lenguado", "p": 90, "c": 2},
-            {"k": "38", "n": "Calamar", "p": 95, "c": 2},
-            {"k": "39", "n": "Salmonete", "p": 75, "c": 2},
-            {"k": "40", "n": "Pescadilla", "p": 75, "c": 2},
-            {"k": "41", "n": "Pescado frito mixto", "p": 95, "c": 2},
-            {"k": "42", "n": "Anchoas fritas", "p": 60, "c": 2},
-            {"k": "43", "n": "Pez espada Rigamontti", "p": 100, "c": 2},
-            {"k": "44", "n": "Tajín de mariscos", "p": 95, "c": 2},
-            {"k": "45", "n": "Pastilla de pescado", "p": 100, "c": 2},
-            {"k": "46", "n": "Lenguado a la parrilla", "p": 95, "c": 2},
-            {"k": "47", "n": "Calamares a la plancha", "p": 95, "c": 2},
-            {"k": "48", "n": "Salmonete a la parrilla", "p": 80, "c": 2},
-            {"k": "49", "n": "Pez espada a la parrilla", "p": 95, "c": 2},
-            {"k": "50", "n": "Pescado frito a la parrilla", "p": 100, "c": 2},
-            {"k": "51", "n": "Gambas a la plancha", "p": 95, "c": 2},
-            {"k": "52", "n": "Paella (1 persona)", "p": 90, "c": 2},
-            {"k": "53", "n": "Brocheta de pescado", "p": 95, "c": 2},
-            {"k": "54", "n": "Refrescos", "p": 15, "c": 3},
-            {"k": "55", "n": "Café / té", "p": 20, "c": 3},
-            {"k": "56", "n": "Agua mineral 0.5L", "p": 10, "c": 3},
-            {"k": "57", "n": "Agua mineral 1.5L", "p": 15, "c": 3},
-            {"k": "58", "n": "Oulmes 1L", "p": 20, "c": 3},
-            {"k": "59", "n": "Zumo fruta natural", "p": 20, "c": 3},
-            {"k": "60", "n": "Toro rojo", "p": 35, "c": 3},
-            {"k": "61", "n": "Flag especial", "p": 30, "c": 3},
-            {"k": "62", "n": "Cigüeña", "p": 30, "c": 3},
-            {"k": "63", "n": "Cerveza sin alcohol", "p": 30, "c": 3},
-            {"k": "64", "n": "Flag oro", "p": 35, "c": 3},
-            {"k": "65", "n": "Heineken", "p": 38, "c": 3},
-            {"k": "66", "n": "Carlsberg", "p": 38, "c": 3},
-            {"k": "67", "n": "Casablanca", "p": 38, "c": 3},
-            {"k": "68", "n": "Budweiser", "p": 37, "c": 3},
-            {"k": "69", "n": "Mahou", "p": 37, "c": 3},
-            {"k": "70", "n": "Cruzcampo", "p": 37, "c": 3},
-            {"k": "71", "n": "Coronita", "p": 40, "c": 3},
-            {"k": "72", "n": "Desperados", "p": 45, "c": 3},
-            {"k": "73", "n": "Tinto de terraza", "p": 60, "c": 3},
-            {"k": "74", "n": "Vino ½ botella", "p": 135, "c": 3},
-            {"k": "75", "n": "Vino ¾ botella", "p": 260, "c": 3},
-            {"k": "76", "n": "Selección vinos ½", "p": 165, "c": 3},
-            {"k": "77", "n": "Selección vinos ¾", "p": 320, "c": 3},
-            {"k": "78", "n": "Copa de vino", "p": 45, "c": 3},
-            {"k": "79", "n": "Doble munich", "p": 37, "c": 3},
-            {"k": "80", "n": "Flan", "p": 25, "c": 4},
-            {"k": "81", "n": "Fruta de temporada", "p": 30, "c": 4},
-            {"k": "82", "n": "Festival", "p": 45, "c": 4},
-            {"k": "83", "n": "Helados", "p": 25, "c": 4},
-            {"k": "84", "n": "Magnum", "p": 30, "c": 4},
-            {"k": "85", "n": "Tarta nougat-limón", "p": 30, "c": 4},
-            {"k": "86", "n": "Tarta Lotus", "p": 35, "c": 4},
+            ("1", "Ensalada mezclada", 40, 0),
+            ("2", "Ensalada rusa", 35, 0),
+            ("3", "Ensalada marroquí", 35, 0),
+            ("4", "Ensalada tropical", 45, 0),
+            ("5", "Ensalada Restinga", 65, 0),
+            ("6", "Sopa de verduras", 35, 0),
+            ("7", "Sopa de pescado", 45, 0),
+            ("8", "Concha fina", 60, 0),
+            ("9", "Anchoas marinadas", 50, 0),
+            ("10", "Sopa del día", 35, 0),
+            ("11", "Croquetas", 45, 0),
+            ("12", "Huevo con papas", 40, 0),
+            ("13", "Tortilla española", 45, 0),
+            ("14", "Tortilla francesa", 40, 0),
+            ("15", "Papas fritas", 25, 0),
+            ("16", "Espaguetis", 55, 0),
+            ("17", "Espaguetis mariscos", 75, 0),
+            ("18", "Espaguetis boloñesa", 65, 0),
+            ("19", "Camarones al ajillo", 75, 0),
+            ("20", "Tortilla de atún", 60, 0),
+            ("21", "Cuscús de carne", 80, 1),
+            ("22", "Cuscús de pollo", 70, 1),
+            ("23", "Cuscús de verduras", 65, 1),
+            ("24", "Tajín de carne", 85, 1),
+            ("25", "Tajín de pollo", 70, 1),
+            ("26", "Tajín carne picada", 75, 1),
+            ("27", "Tajín de hígado", 95, 1),
+            ("28", "Pastilla de pollo", 90, 1),
+            ("29", "Brocheta de carne", 80, 1),
+            ("30", "Brocheta de pollo", 70, 1),
+            ("31", "Kebab mixto", 85, 1),
+            ("32", "Brocheta carne picada", 75, 1),
+            ("33", "Filete de res", 110, 1),
+            ("34", "Filete de pollo", 70, 1),
+            ("35", "Filete pollo champiñones", 80, 1),
+            ("36", "Filete de hígado", 95, 1),
+            ("37", "Lenguado", 90, 2),
+            ("38", "Calamar", 95, 2),
+            ("39", "Salmonete", 75, 2),
+            ("40", "Pescadilla", 75, 2),
+            ("41", "Pescado frito mixto", 95, 2),
+            ("42", "Anchoas fritas", 60, 2),
+            ("43", "Pez espada Rigamontti", 100, 2),
+            ("44", "Tajín de mariscos", 95, 2),
+            ("45", "Pastilla de pescado", 100, 2),
+            ("46", "Lenguado parrilla", 95, 2),
+            ("47", "Calamares plancha", 95, 2),
+            ("48", "Salmonete parrilla", 80, 2),
+            ("49", "Pez espada parrilla", 95, 2),
+            ("50", "Pescado frito parrilla", 100, 2),
+            ("51", "Gambas plancha", 95, 2),
+            ("52", "Paella (1p)", 90, 2),
+            ("53", "Brocheta de pescado", 95, 2),
+            ("54", "Refrescos", 15, 3),
+            ("55", "Café/té", 20, 3),
+            ("56", "Agua 0.5L", 10, 3),
+            ("57", "Agua 1.5L", 15, 3),
+            ("58", "Oulmes 1L", 20, 3),
+            ("59", "Zumo natural", 20, 3),
+            ("60", "Toro rojo", 35, 3),
+            ("61", "Flag especial", 30, 3),
+            ("62", "Cigüeña", 30, 3),
+            ("63", "Cerveza s/alcohol", 30, 3),
+            ("64", "Flag oro", 35, 3),
+            ("65", "Heineken", 38, 3),
+            ("66", "Carlsberg", 38, 3),
+            ("67", "Casablanca", 38, 3),
+            ("68", "Budweiser", 37, 3),
+            ("69", "Mahou", 37, 3),
+            ("70", "Cruzcampo", 37, 3),
+            ("71", "Coronita", 40, 3),
+            ("72", "Desperados", 45, 3),
+            ("73", "Tinto de terraza", 60, 3),
+            ("74", "Vino ½ botella", 135, 3),
+            ("75", "Vino ¾ botella", 260, 3),
+            ("76", "Selección vinos ½", 165, 3),
+            ("77", "Selección vinos ¾", 320, 3),
+            ("78", "Copa de vino", 45, 3),
+            ("79", "Doble munich", 37, 3),
+            ("80", "Flan", 25, 4),
+            ("81", "Fruta temporada", 30, 4),
+            ("82", "Festival", 45, 4),
+            ("83", "Helados", 25, 4),
+            ("84", "Magnum", 30, 4),
+            ("85", "Tarta nougat-limón", 30, 4),
+            ("86", "Tarta Lotus", 35, 4),
+        ],
+    },
+    "en": {
+        "cats": ["🥗 Starters", "🥘 Meats", "🐟 Fish", "🍹 Drinks", "🍰 Desserts"],
+        "items": [
+            ("1", "Mixed salad", 40, 0),
+            ("2", "Russian salad", 35, 0),
+            ("3", "Moroccan salad", 35, 0),
+            ("4", "Tropical salad", 45, 0),
+            ("5", "Restinga salad", 65, 0),
+            ("6", "Vegetable soup", 35, 0),
+            ("7", "Fish soup", 45, 0),
+            ("8", "Concha fina", 60, 0),
+            ("9", "Marinated anchovies", 50, 0),
+            ("10", "Soup of the day", 35, 0),
+            ("11", "Croquettes", 45, 0),
+            ("12", "Egg with fries", 40, 0),
+            ("13", "Spanish tortilla", 45, 0),
+            ("14", "French omelette", 40, 0),
+            ("15", "French fries", 25, 0),
+            ("16", "Spaghetti", 55, 0),
+            ("17", "Spaghetti seafood", 75, 0),
+            ("18", "Spaghetti bolognese", 65, 0),
+            ("19", "Shrimp pil pil", 75, 0),
+            ("20", "Tuna omelette", 60, 0),
+            ("21", "Meat couscous", 80, 1),
+            ("22", "Chicken couscous", 70, 1),
+            ("23", "Vegetable couscous", 65, 1),
+            ("24", "Meat tagine", 85, 1),
+            ("25", "Chicken tagine", 70, 1),
+            ("26", "Minced meat tagine", 75, 1),
+            ("27", "Liver tagine", 95, 1),
+            ("28", "Chicken pastilla", 90, 1),
+            ("29", "Meat kebab", 80, 1),
+            ("30", "Chicken kebab", 70, 1),
+            ("31", "Mixed kebab", 85, 1),
+            ("32", "Minced meat kebab", 75, 1),
+            ("33", "Beef fillet", 110, 1),
+            ("34", "Chicken fillet", 70, 1),
+            ("35", "Chicken fillet mushroom", 80, 1),
+            ("36", "Liver fillet", 95, 1),
+            ("37", "Sole", 90, 2),
+            ("38", "Squid", 95, 2),
+            ("39", "Red mullet", 75, 2),
+            ("40", "Whiting", 75, 2),
+            ("41", "Mixed fried fish", 95, 2),
+            ("42", "Anchovies", 60, 2),
+            ("43", "Swordfish Rigamontti", 100, 2),
+            ("44", "Seafood tagine", 95, 2),
+            ("45", "Fish pastilla", 100, 2),
+            ("46", "Grilled sole", 95, 2),
+            ("47", "Grilled squid", 95, 2),
+            ("48", "Grilled red mullet", 80, 2),
+            ("49", "Grilled swordfish", 95, 2),
+            ("50", "Grilled mixed fry", 100, 2),
+            ("51", "Grilled shrimp", 95, 2),
+            ("52", "Paella (1p)", 90, 2),
+            ("53", "Fish skewer", 95, 2),
+            ("54", "Soft drinks", 15, 3),
+            ("55", "Coffee/tea", 20, 3),
+            ("56", "Mineral water 0.5L", 10, 3),
+            ("57", "Mineral water 1.5L", 15, 3),
+            ("58", "Oulmes 1L", 20, 3),
+            ("59", "Fresh juice", 20, 3),
+            ("60", "Red Bull", 35, 3),
+            ("61", "Special flag", 30, 3),
+            ("62", "Stork", 30, 3),
+            ("63", "Non-alcoholic beer", 30, 3),
+            ("64", "Flag gold", 35, 3),
+            ("65", "Heineken", 38, 3),
+            ("66", "Carlsberg", 38, 3),
+            ("67", "Casablanca", 38, 3),
+            ("68", "Budweiser", 37, 3),
+            ("69", "Mahou", 37, 3),
+            ("70", "Cruzcampo", 37, 3),
+            ("71", "Coronita", 40, 3),
+            ("72", "Desperados", 45, 3),
+            ("73", "Tinto de terraza", 60, 3),
+            ("74", "Wine ½ bottle", 135, 3),
+            ("75", "Wine ¾ bottle", 260, 3),
+            ("76", "Wine selection ½", 165, 3),
+            ("77", "Wine selection ¾", 320, 3),
+            ("78", "Glass of wine", 45, 3),
+            ("79", "Doppel Munich", 37, 3),
+            ("80", "Flan", 25, 4),
+            ("81", "Seasonal fruit", 30, 4),
+            ("82", "Festival", 45, 4),
+            ("83", "Ice cream", 25, 4),
+            ("84", "Magnum", 30, 4),
+            ("85", "Nougat-lemon tart", 30, 4),
+            ("86", "Lotus tart", 35, 4),
+        ],
+    },
+    "fr": {
+        "cats": [
+            "🥗 Entrées",
+            "🥘 Viandes",
+            "🐟 Poissons",
+            "🍹 Boissons",
+            "🍰 Desserts",
+        ],
+        "items": [
+            ("1", "Salade variée", 40, 0),
+            ("2", "Salade russe", 35, 0),
+            ("3", "Salade marocaine", 35, 0),
+            ("4", "Salade tropicale", 45, 0),
+            ("5", "Salade Restinga", 65, 0),
+            ("6", "Soupe de légumes", 35, 0),
+            ("7", "Soupe de poisson", 45, 0),
+            ("8", "Concha fina", 60, 0),
+            ("9", "Anchois marinés", 50, 0),
+            ("10", "Potage du jour", 35, 0),
+            ("11", "Croquettes", 45, 0),
+            ("12", "Œuf avec frites", 40, 0),
+            ("13", "Tortilla espagnole", 45, 0),
+            ("14", "Omelette française", 40, 0),
+            ("15", "Frites", 25, 0),
+            ("16", "Spaghetti", 55, 0),
+            ("17", "Spaghetti fruits de mer", 75, 0),
+            ("18", "Spaghetti bolognaise", 65, 0),
+            ("19", "Crevettes à l'ail", 75, 0),
+            ("20", "Omelette au thon", 60, 0),
+            ("21", "Couscous viande", 80, 1),
+            ("22", "Couscous poulet", 70, 1),
+            ("23", "Couscous végétarien", 65, 1),
+            ("24", "Tajine viande", 85, 1),
+            ("25", "Tajine poulet", 70, 1),
+            ("26", "Tajine viande hachée", 75, 1),
+            ("27", "Tajine de foie", 95, 1),
+            ("28", "Pastilla poulet", 90, 1),
+            ("29", "Brochette viande", 80, 1),
+            ("30", "Brochette poulet", 70, 1),
+            ("31", "Kebab mixte", 85, 1),
+            ("32", "Brochette viande hachée", 75, 1),
+            ("33", "Filet de bœuf", 110, 1),
+            ("34", "Filet de poulet", 70, 1),
+            ("35", "Filet poulet champignons", 80, 1),
+            ("36", "Filet de foie", 95, 1),
+            ("37", "Sole", 90, 2),
+            ("38", "Calamar", 95, 2),
+            ("39", "Rouget", 75, 2),
+            ("40", "Merlan", 75, 2),
+            ("41", "Friture mixte", 95, 2),
+            ("42", "Anchois", 60, 2),
+            ("43", "Espadon Rigamontti", 100, 2),
+            ("44", "Tajine fruits de mer", 95, 2),
+            ("45", "Pastilla de poisson", 100, 2),
+            ("46", "Soles grillées", 95, 2),
+            ("47", "Calamars grillés", 95, 2),
+            ("48", "Rougets grillés", 80, 2),
+            ("49", "Espadon grillé", 95, 2),
+            ("50", "Friture grillée", 100, 2),
+            ("51", "Crevettes grillées", 95, 2),
+            ("52", "Paella (1p)", 90, 2),
+            ("53", "Brochette de poisson", 95, 2),
+            ("54", "Sodas", 15, 3),
+            ("55", "Café/thé", 20, 3),
+            ("56", "Eau minérale 0.5L", 10, 3),
+            ("57", "Eau minérale 1.5L", 15, 3),
+            ("58", "Oulmes 1L", 20, 3),
+            ("59", "Jus (bio)", 20, 3),
+            ("60", "Red Bull", 35, 3),
+            ("61", "Flag spécial", 30, 3),
+            ("62", "Cigogne", 30, 3),
+            ("63", "Bière sans alcool", 30, 3),
+            ("64", "Flag or", 35, 3),
+            ("65", "Heineken", 38, 3),
+            ("66", "Carlsberg", 38, 3),
+            ("67", "Casablanca", 38, 3),
+            ("68", "Budweiser", 37, 3),
+            ("69", "Mahou", 37, 3),
+            ("70", "Cruzcampo", 37, 3),
+            ("71", "Coronita", 40, 3),
+            ("72", "Desperados", 45, 3),
+            ("73", "Tinto de terrasse", 60, 3),
+            ("74", "Vin ½", 135, 3),
+            ("75", "Vin ¾", 260, 3),
+            ("76", "Sélection vin ½", 165, 3),
+            ("77", "Sélection vin ¾", 320, 3),
+            ("78", "Verre de vin", 45, 3),
+            ("79", "Doppel Munich", 37, 3),
+            ("80", "Flan", 25, 4),
+            ("81", "Fruits de saison", 30, 4),
+            ("82", "Festival", 45, 4),
+            ("83", "Glaces", 25, 4),
+            ("84", "Magnum", 30, 4),
+            ("85", "Tarte nougat-citron", 30, 4),
+            ("86", "Tarte Lotus", 35, 4),
+        ],
+    },
+    "ar": {
+        "cats": ["🥗 المقبلات", "🥘 اللحوم", "🐟 السمك", "🍹 المشروبات", "🍰 الحلويات"],
+        "items": [
+            ("1", "سلطة مختلطة", 40, 0),
+            ("2", "سلطة روسية", 35, 0),
+            ("3", "سلطة مغربية", 35, 0),
+            ("4", "سلطة استوائية", 45, 0),
+            ("5", "سلطة ريستينجا", 65, 0),
+            ("6", "شوربة خضار", 35, 0),
+            ("7", "حساء السمك", 45, 0),
+            ("8", "كونشا فينا", 60, 0),
+            ("9", "الأنشوجة المتبلة", 50, 0),
+            ("10", "حساء اليوم", 35, 0),
+            ("11", "كروكيت", 45, 0),
+            ("12", "بيض مع بطاطس", 40, 0),
+            ("13", "التورتيلا الإسبانية", 45, 0),
+            ("14", "عجة فرنسية", 40, 0),
+            ("15", "بطاطس مقلية", 25, 0),
+            ("16", "معكرونة", 55, 0),
+            ("17", "سباغيتي بالمأكولات البحرية", 75, 0),
+            ("18", "سباغيتي بولونيز", 65, 0),
+            ("19", "جمبري بصلصة الثوم", 75, 0),
+            ("20", "أومليت بالتونة", 60, 0),
+            ("21", "كسكس باللحم", 80, 1),
+            ("22", "كسكس بالدجاج", 70, 1),
+            ("23", "كسكس نباتي", 65, 1),
+            ("24", "طاجن لحم", 85, 1),
+            ("25", "طاجين الدجاج", 70, 1),
+            ("26", "طاجن اللحم المفروم", 75, 1),
+            ("27", "طاجين الكبدة", 95, 1),
+            ("28", "بسطيلة دجاج", 90, 1),
+            ("29", "كباب لحم", 80, 1),
+            ("30", "كباب دجاج", 70, 1),
+            ("31", "كباب مشكل", 85, 1),
+            ("32", "كباب لحم مفروم", 75, 1),
+            ("33", "لحم فيليه", 110, 1),
+            ("34", "فيليه دجاج", 70, 1),
+            ("35", "فيليه دجاج بالفطر", 80, 1),
+            ("36", "فيليه الكبد", 95, 1),
+            ("37", "نعل", 90, 2),
+            ("38", "الحبار", 95, 2),
+            ("39", "البوري الأحمر", 75, 2),
+            ("40", "البياض", 75, 2),
+            ("41", "قلي مشكل", 95, 2),
+            ("42", "أنشوجة مقلية", 60, 2),
+            ("43", "سمك أبو سيف", 100, 2),
+            ("44", "طاجين المأكولات البحرية", 95, 2),
+            ("45", "بسطيلة السمك", 100, 2),
+            ("46", "نعل مشوي", 95, 2),
+            ("47", "حبار مشوي", 95, 2),
+            ("48", "بوري أحمر مشوي", 80, 2),
+            ("49", "أبو سيف مشوي", 95, 2),
+            ("50", "قلي مشوي", 100, 2),
+            ("51", "جمبري مشوي", 95, 2),
+            ("52", "البايلا", 90, 2),
+            ("53", "سيخ السمك", 95, 2),
+            ("54", "مشروبات غازية", 15, 3),
+            ("55", "قهوة/شاي", 20, 3),
+            ("56", "مياه معدنية 0.5L", 10, 3),
+            ("57", "مياه معدنية 1.5L", 15, 3),
+            ("58", "أولمس 1L", 20, 3),
+            ("59", "عصير فواكه", 20, 3),
+            ("60", "ريد بول", 35, 3),
+            ("61", "فلاج خاص", 30, 3),
+            ("62", "اللقلق", 30, 3),
+            ("63", "بيرة خالية من الكحول", 30, 3),
+            ("64", "فلاج ذهبي", 35, 3),
+            ("65", "هاينكن", 38, 3),
+            ("66", "كارلسبيرغ", 38, 3),
+            ("67", "الدار البيضاء", 38, 3),
+            ("68", "بودوايزر", 37, 3),
+            ("69", "ماهو", 37, 3),
+            ("70", "كروزكامبو", 37, 3),
+            ("71", "كورونيتا", 40, 3),
+            ("72", "ديسبيرادوس", 45, 3),
+            ("73", "تينتو دي تيرازا", 60, 3),
+            ("74", "نبيذ ½ زجاجة", 135, 3),
+            ("75", "نبيذ ¾ زجاجة", 260, 3),
+            ("76", "تشكيلة نبيذ ½", 165, 3),
+            ("77", "تشكيلة نبيذ ¾", 320, 3),
+            ("78", "كأس نبيذ", 45, 3),
+            ("79", "دوبل ميونيخ", 37, 3),
+            ("80", "فلان", 25, 4),
+            ("81", "فواكه موسمية", 30, 4),
+            ("82", "مهرجان", 45, 4),
+            ("83", "آيس كريم", 25, 4),
+            ("84", "ماغنوم", 30, 4),
+            ("85", "تارت نوجا-ليمون", 30, 4),
+            ("86", "تارت اللوتس", 35, 4),
+        ],
+    },
+    "darija": {
+        "cats": ["🥗 Lmqblat", "🥘 L7em", "🐟 L7out", "🍹 Mashrubat", "🍰 Desserts"],
+        "items": [
+            ("1", "Salada mkhltata", 40, 0),
+            ("2", "Salada rusiya", 35, 0),
+            ("3", "Salada maghribia", 35, 0),
+            ("4", "Salada tropikal", 45, 0),
+            ("5", "Salada Restinga", 65, 0),
+            ("6", "Chourba khodra", 35, 0),
+            ("7", "Chourba l7out", 45, 0),
+            ("8", "Concha fina", 60, 0),
+            ("9", "Anchwa mratba", 50, 0),
+            ("10", "Chourba nhar", 35, 0),
+            ("11", "Krokit", 45, 0),
+            ("12", "Byd m3a batata", 40, 0),
+            ("13", "Tortiya ispania", 45, 0),
+            ("14", "Omlet fransawia", 40, 0),
+            ("15", "Batata mqliya", 25, 0),
+            ("16", "Spagheti", 55, 0),
+            ("17", "Spagheti b l7out", 75, 0),
+            ("18", "Spagheti bolognaise", 65, 0),
+            ("19", "Chambre bi toum", 75, 0),
+            ("20", "Omlet b thon", 60, 0),
+            ("21", "Ksks b l7em", 80, 1),
+            ("22", "Ksks b djej", 70, 1),
+            ("23", "Ksks b khodra", 65, 1),
+            ("24", "Tajine dyal l7em", 85, 1),
+            ("25", "Tajine dyal djej", 70, 1),
+            ("26", "Tajine l7em mchermel", 75, 1),
+            ("27", "Tajine dyal kebda", 95, 1),
+            ("28", "Bastila dyal djej", 90, 1),
+            ("29", "Brocheta dyal l7em", 80, 1),
+            ("30", "Brocheta dyal djej", 70, 1),
+            ("31", "Kebab mchkhel", 85, 1),
+            ("32", "Brocheta l7em mchermel", 75, 1),
+            ("33", "Filet dyal bovin", 110, 1),
+            ("34", "Filet dyal djej", 70, 1),
+            ("35", "Filet djej b sos lfkih", 80, 1),
+            ("36", "Filet dyal kebda", 95, 1),
+            ("37", "Sole", 90, 2),
+            ("38", "Calamar", 95, 2),
+            ("39", "Rouget", 75, 2),
+            ("40", "Merlan", 75, 2),
+            ("41", "Friture mkhlta", 95, 2),
+            ("42", "Anchwa mqliya", 60, 2),
+            ("43", "Sayfich Rigamontti", 100, 2),
+            ("44", "Tajine lmaakolat lba7ria", 95, 2),
+            ("45", "Bastila dyal l7out", 100, 2),
+            ("46", "Sole machwi", 95, 2),
+            ("47", "Calamar machwi", 95, 2),
+            ("48", "Rouget machwi", 80, 2),
+            ("49", "Sayfich machwi", 95, 2),
+            ("50", "Friture machwiya", 100, 2),
+            ("51", "Chambar machwi", 95, 2),
+            ("52", "Paella 1 persona", 90, 2),
+            ("53", "Brocheta dyal l7out", 95, 2),
+            ("54", "Sodas", 15, 3),
+            ("55", "Café / atay", 20, 3),
+            ("56", "Ma miniral 0.5L", 10, 3),
+            ("57", "Ma miniral 1.5L", 15, 3),
+            ("58", "Oulmes 1L", 20, 3),
+            ("59", "Jousse bio", 20, 3),
+            ("60", "Toro rojo", 35, 3),
+            ("61", "Flag special", 30, 3),
+            ("62", "Cigogne", 30, 3),
+            ("63", "Bira bla lcohol", 30, 3),
+            ("64", "Flag gold", 35, 3),
+            ("65", "Heineken", 38, 3),
+            ("66", "Calsberg", 38, 3),
+            ("67", "Casablanca", 38, 3),
+            ("68", "Budweiser", 37, 3),
+            ("69", "Mahou", 37, 3),
+            ("70", "Cruzcampo", 37, 3),
+            ("71", "Coronita", 40, 3),
+            ("72", "Desperados", 45, 3),
+            ("73", "Tinto dyal terrazza", 60, 3),
+            ("74", "Vin 1/2", 135, 3),
+            ("75", "Vin 3/4", 260, 3),
+            ("76", "Selection vin 1/2", 165, 3),
+            ("77", "Selection vin 3/4", 320, 3),
+            ("78", "Kass dyal vin", 45, 3),
+            ("79", "Doppel Munich", 37, 3),
+            ("80", "Flan", 25, 4),
+            ("81", "Fawakih moussimiya", 30, 4),
+            ("82", "Festival", 45, 4),
+            ("83", "Glaces", 25, 4),
+            ("84", "Magnum", 30, 4),
+            ("85", "Tarte nougat-limon", 30, 4),
+            ("86", "Tarte Lotus", 35, 4),
         ],
     },
 }
 
 
-# ── PLATOS como lookup rápido ───────────────────────────────────
-def build_platos_lookup():
-    """Construye diccionario {lang: {k: item}} para búsqueda rápida."""
-    lookup = {}
-    for lang, data in MENU_RESTINGA.items():
-        lookup[lang] = {item["k"]: item for item in data["items"]}
-    return lookup
+# ── Construir lookups ────────────────────────────────────────────
+def _build_lookups():
+    """Construye diccionarios de búsqueda rápida."""
+    platos = {}
+    for lang, data in _MENU_DATA.items():
+        platos[lang] = {
+            it[0]: {"k": it[0], "n": it[1], "p": it[2], "c": it[3]}
+            for it in data["items"]
+        }
+    return platos
 
 
-PLATOS_LOOKUP = build_platos_lookup()
+PLATOS = _build_lookups()
 
 
-# ── Paginación del menú ─────────────────────────────────────────
-PAGE_SIZE = 8
+# ── Paginación ─────────────────────────────────────────────────
+PAGE_1_SIZE = 35
+PAGE_N_SIZE = 8
 
 
 def get_menu_page(lang: str, page: int = 0) -> tuple:
-    """Retorna (texto_mensaje, total_paginas) para una página."""
-    data = MENU_RESTINGA.get(lang, MENU_RESTINGA["es"])
+    """Retorna (texto_mensaje, total_paginas)."""
+    data = _MENU_DATA.get(lang, _MENU_DATA["es"])
     items = data["items"]
     cats = data["cats"]
-    total_pages = (len(items) + PAGE_SIZE - 1) // PAGE_SIZE
-    page = max(0, min(page, total_pages - 1))
 
-    start = page * PAGE_SIZE
-    end = min(start + PAGE_SIZE, len(items))
+    # Calcular total de páginas
+    rest = len(items) - PAGE_1_SIZE
+    extra = max(0, (rest + PAGE_N_SIZE - 1) // PAGE_N_SIZE)
+    total_pages = 1 + extra
+
+    # Calcular índices
+    if page == 0:
+        start, end = 0, min(PAGE_1_SIZE, len(items))
+    else:
+        start = PAGE_1_SIZE + (page - 1) * PAGE_N_SIZE
+        end = min(start + PAGE_N_SIZE, len(items))
+
+    if start >= len(items):
+        page = 0
+        start, end = 0, min(PAGE_1_SIZE, len(items))
+
     page_items = items[start:end]
 
-    lines = [
-        f"📋 *MENÚ RESTINGA* — Página {page + 1}/{total_pages}"
-    ]
+    lines = [f"📋 *MENU* — Página {page + 1}/{total_pages}"]
     current_cat = None
     for it in page_items:
-        if it["c"] != current_cat:
-            current_cat = it["c"]
+        if it[3] != current_cat:
+            current_cat = it[3]
             lines.append(f"\n{cats[current_cat]}")
-        lines.append(f"{it['k']}. {it['n']} ({it['p']} MAD)")
+        lines.append(f"{it[0]}. {it[1]} ({it[2]} MAD)")
 
     nav = []
     if page > 0:
@@ -452,18 +796,11 @@ I18N = {
             "5. 🇸🇦 العربية"
         ),
         "added": "✅ {plato} añadido. Total: {total} MAD.",
-        "cart": (
-            "🛒 *PEDIDO*\n{items}\n"
-            "💰 Total: {total} MAD"
-        ),
+        "cart": ("🛒 *PEDIDO*\n{items}\n💰 Total: {total} MAD"),
         "cart_empty": "🛒 Carrito vacío.",
         "confirm": "✅ Pedido guardado! ID: {id_pedido}",
-        "confirm_empty": (
-            "⚠️ Carrito vacío. Nada que confirmar."
-        ),
-        "removed": (
-            "🗑️ {plato} eliminado. Total: {total} MAD."
-        ),
+        "confirm_empty": ("⚠️ Carrito vacío. Nada que confirmar."),
+        "removed": ("🗑️ {plato} eliminado. Total: {total} MAD."),
         "invalid": "❌ Nº inválido.",
         "reset": "🔄 Sesión reiniciada.",
         "help": (
@@ -476,25 +813,16 @@ I18N = {
             "`r` → Reservar\n"
             "`q` → Salir"
         ),
-        "res_personas": (
-            "👥 ¿Cuántas personas? (responde un número)"
-        ),
-        "res_fecha": (
-            "📅 ¿Qué fecha? (YYYY-MM-DD)\n"
-            "Ej: 2026-05-25"
-        ),
-        "res_hora": (
-            "🕐 ¿Qué hora? (HH:MM)\n" "Ej: 19:30"
-        ),
+        "res_personas": ("👥 ¿Cuántas personas? (responde un número)"),
+        "res_fecha": ("📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25"),
+        "res_hora": ("🕐 ¿Qué hora? (HH:MM)\nEj: 19:30"),
         "res_confirm": (
             "📋 *Reserva*\n"
             "👥 {personas} personas\n"
             "📅 {fecha} 🕐 {hora}\n"
             "\nResponde `si` para confirmar"
         ),
-        "res_saved": (
-            "✅ Reserva guardada!\n" "Código: {codigo}"
-        ),
+        "res_saved": ("✅ Reserva guardada!\nCódigo: {codigo}"),
         "res_cancel": "❌ Reserva cancelada.",
     },
     "en": {
@@ -508,18 +836,11 @@ I18N = {
             "5. 🇸🇦 العربية"
         ),
         "added": "✅ {plato} added. Total: {total} MAD.",
-        "cart": (
-            "🛒 *ORDER*\n{items}\n"
-            "💰 Total: {total} MAD"
-        ),
+        "cart": ("🛒 *ORDER*\n{items}\n💰 Total: {total} MAD"),
         "cart_empty": "🛒 Cart is empty.",
         "confirm": "✅ Order saved! ID: {id_pedido}",
-        "confirm_empty": (
-            "⚠️ Cart empty. Nothing to confirm."
-        ),
-        "removed": (
-            "🗑️ {plato} removed. Total: {total} MAD."
-        ),
+        "confirm_empty": ("⚠️ Cart empty. Nothing to confirm."),
+        "removed": ("🗑️ {plato} removed. Total: {total} MAD."),
         "invalid": "❌ Invalid number.",
         "reset": "🔄 Session restarted.",
         "help": (
@@ -532,25 +853,16 @@ I18N = {
             "`r` → Reserve\n"
             "`q` → Quit"
         ),
-        "res_personas": (
-            "👥 How many people? (reply a number)"
-        ),
-        "res_fecha": (
-            "📅 What date? (YYYY-MM-DD)\n"
-            "Ex: 2026-05-25"
-        ),
-        "res_hora": (
-            "🕐 What time? (HH:MM)\n" "Ex: 19:30"
-        ),
+        "res_personas": ("👥 How many people? (reply a number)"),
+        "res_fecha": ("📅 What date? (YYYY-MM-DD)\nEx: 2026-05-25"),
+        "res_hora": ("🕐 What time? (HH:MM)\nEx: 19:30"),
         "res_confirm": (
             "📋 *Reservation*\n"
             "👥 {personas} people\n"
             "📅 {fecha} 🕐 {hora}\n"
             "\nReply `yes` to confirm"
         ),
-        "res_saved": (
-            "✅ Reservation saved!\n" "Code: {codigo}"
-        ),
+        "res_saved": ("✅ Reservation saved!\nCode: {codigo}"),
         "res_cancel": "❌ Reservation cancelled.",
     },
 }
@@ -558,9 +870,7 @@ I18N = {
 
 def t(key: str, lang: str = "es", **kwargs) -> str:
     """Traducción con fallback a español."""
-    text = (
-        I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
-    )
+    text = I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
     return text.format(**kwargs)
 
 
@@ -592,9 +902,7 @@ async def process_msg(payload: dict):
             rname = rest.nombre
 
             # 2. Cliente
-            res_c = await db.execute(
-                select(Cliente).where(Cliente.wa_id == phone)
-            )
+            res_c = await db.execute(select(Cliente).where(Cliente.wa_id == phone))
             cli = res_c.scalar_one_or_none()
             if not cli:
                 cli = Cliente(
@@ -657,6 +965,27 @@ async def process_msg(payload: dict):
                     ctx["menu_page"] = 0
                     cli.language_pref = "en"
                     reply, _ = get_menu_page("en", 0)
+                elif txt in ("3", "fr", "français", "frances"):
+                    lang = "fr"
+                    ctx["lang"] = "fr"
+                    ctx["fase"] = "menu"
+                    ctx["menu_page"] = 0
+                    cli.language_pref = "fr"
+                    reply, _ = get_menu_page("fr", 0)
+                elif txt in ("4", "darija", "الدارجة"):
+                    lang = "darija"
+                    ctx["lang"] = "darija"
+                    ctx["fase"] = "menu"
+                    ctx["menu_page"] = 0
+                    cli.language_pref = "darija"
+                    reply, _ = get_menu_page("darija", 0)
+                elif txt in ("5", "ar", "العربية", "arabic"):
+                    lang = "ar"
+                    ctx["lang"] = "ar"
+                    ctx["fase"] = "menu"
+                    ctx["menu_page"] = 0
+                    cli.language_pref = "ar"
+                    reply, _ = get_menu_page("ar", 0)
                 else:
                     reply = t("welcome", lang, restaurante=rname)
 
@@ -664,7 +993,7 @@ async def process_msg(payload: dict):
             # FLUJO: MENÚ PRINCIPAL
             # ═══════════════════════════════════════════════════
             elif fase == "menu":
-                lookup = PLATOS_LOOKUP.get(lang, PLATOS_LOOKUP["es"])
+                lookup = PLATOS.get(lang, PLATOS["es"])
 
                 if txt in ("m", "menu", "menú"):
                     ctx["menu_page"] = 0
@@ -698,14 +1027,9 @@ async def process_msg(payload: dict):
                     if items:
                         total = sum(i["p"] for i in items)
                         items_txt = "\n".join(
-                            [
-                                f"• {i['n']} ({i['p']} MAD)"
-                                for i in items
-                            ]
+                            [f"• {i['n']} ({i['p']} MAD)" for i in items]
                         )
-                        reply = t(
-                            "cart", lang, items=items_txt, total=total
-                        )
+                        reply = t("cart", lang, items=items_txt, total=total)
                     else:
                         reply = t("cart_empty", lang)
 
@@ -802,9 +1126,7 @@ async def process_msg(payload: dict):
                 if txt in ("si", "yes", "oui", "نعم"):
                     now = now_utc()
                     sec = now.second
-                    codigo = (
-                        f"RES-{now.strftime('%Y%m%d')}-{sec:02d}"
-                    )
+                    codigo = f"RES-{now.strftime('%Y%m%d')}-{sec:02d}"
                     fecha_dt = datetime.strptime(
                         f"{ctx['res_fecha']} {ctx['res_hora']}",
                         "%Y-%m-%d %H:%M",
@@ -859,7 +1181,7 @@ async def process_msg(payload: dict):
 # ═══════════════════════════════════════════════════════════════════
 # 🌐 APP & ROUTES
 # ═══════════════════════════════════════════════════════════════════
-app = FastAPI(title="Orquestrator ISA v13.2")
+app = FastAPI(title="Orquestrator ISA v13.4")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
@@ -867,7 +1189,7 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 def health():
     return {
         "status": "ok",
-        "version": "13.2",
+        "version": "13.4",
         "db": "online" if engine else "offline",
     }
 
@@ -876,21 +1198,14 @@ def health():
 def wb_verify(req: Request):
     if req.query_params.get("hub.verify_token") == WEBHOOK_VERIFY:
         return int(req.query_params.get("hub.challenge", 0))
-    return JSONResponse(
-        content={"status": "forbidden"}, status_code=403
-    )
+    return JSONResponse(content={"status": "forbidden"}, status_code=403)
 
 
 @app.post("/api/whatsapp/webhook")
 async def wb_post(req: Request, bg: BackgroundTasks):
-    client_ip = (
-        req.headers.get("x-forwarded-for", req.client.host)
-        or "unknown"
-    )
+    client_ip = req.headers.get("x-forwarded-for", req.client.host) or "unknown"
     if not check_rate_limit(client_ip.split(",")[0].strip()):
-        return JSONResponse(
-            content={"status": "rate_limited"}, status_code=429
-        )
+        return JSONResponse(content={"status": "rate_limited"}, status_code=429)
     bg.add_task(process_msg, await req.json())
     return JSONResponse(content={"status": "ok"}, status_code=200)
 
@@ -915,7 +1230,7 @@ DASH_HTML = (
     "h1{color:#00e5ff}"
     "</style>"
     "</head><body>"
-    "<h1>📊 Orquestrator ISA v13.2</h1>"
+    "<h1>📊 Orquestrator ISA v13.4</h1>"
     "<div class='card'><h2>🟢 Operativo</h2>"
     "<p>Webhook: /api/whatsapp/webhook</p>"
     "<p>Health: /health</p>"
@@ -951,7 +1266,4 @@ def p_recep(req: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        app, host="0.0.0.0", port=int(os.getenv("PORT", 10000))
-    )
-
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
