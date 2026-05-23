@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v15.5 - CORREGIDO DEFINITIVO
-- Usa Restinga como restaurante por defecto
-- Paginación con emojis (d → ➡️ Siguiente, a → ⬅️ Anterior)
-- Menú completamente funcional (87 platos)
+ORQUESTRATOR ISA v15.6 - CORREGIDO
+- UUID serialization fix (str(id_plato))
+- Comando r para reservas
+- Menú paginado con d/a
 """
 
 import os
@@ -61,7 +61,7 @@ if DATABASE_URL:
     logger.info("✅ Engine DB inicializado (Neon)")
 
 # ============================================================
-# MODELOS (igual que antes)
+# MODELOS
 # ============================================================
 class Base(DeclarativeBase):
     pass
@@ -184,7 +184,7 @@ class ReservaHistorial(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v15.5")
+app = FastAPI(title="Orquestrator ISA v15.6")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 # ============================================================
@@ -245,7 +245,7 @@ I18N = {
         "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija",
         "menu_header": "📋 *MENÚ* (Página {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n➡️ *Siguiente* → `d` → ➡️\n⬅️ *Anterior* → `a` → ⬅️\n🛒 Añade un número para agregar",
+        "menu_footer": "\n➡️ *Siguiente* → `d` ➡️\n⬅️ *Anterior* → `a` ⬅️\n🛒 Añade un número para agregar",
         "added": "✅ {plato} añadido. Total: {total} MAD.",
         "cart": "🛒 *PEDIDO*\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Carrito vacío.",
@@ -254,7 +254,7 @@ I18N = {
         "removed": "🗑️ {plato} eliminado. Total: {total} MAD.",
         "invalid": "❌ Opción inválida.",
         "reset": "🔄 Sesión reiniciada.",
-        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`reservar` → Reservar mesa\n`q` → Salir",
+        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` o `reservar` → Reservar mesa\n`q` → Salir",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)\nEj: 19:30",
@@ -270,7 +270,7 @@ I18N = {
         "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija",
         "menu_header": "📋 *MENU* (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n➡️ *Next* → `d` → ➡️\n⬅️ *Prev* → `a` → ⬅️\nReply a number to add",
+        "menu_footer": "\n➡️ *Next* → `d` ➡️\n⬅️ *Prev* → `a` ⬅️\nReply a number to add",
         "added": "✅ {plato} added. Total: {total} MAD.",
         "cart": "🛒 *ORDER*\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Cart empty.",
@@ -279,7 +279,7 @@ I18N = {
         "removed": "🗑️ {plato} removed. Total: {total} MAD.",
         "invalid": "❌ Invalid option.",
         "reset": "🔄 Session restarted.",
-        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`reservar` → Book table\n`q` → Quit",
+        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`r` or `reservar` → Book table\n`q` → Quit",
         "res_personas": "👥 How many people? (reply a number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)\nEx: 2026-05-25",
         "res_hora": "🕐 Time? (HH:MM)\nEx: 19:30",
@@ -361,22 +361,8 @@ async def process_msg(payload: dict):
                 logger.info(f"Nuevo cliente {phone} asignado a restaurante {rname} ({rid})")
             else:
                 rid = cli.id_restaurante
-                # Obtener nombre del restaurante para mensajes
                 rest_res = await db.execute(select(Restaurante.nombre).where(Restaurante.id_restaurante == rid))
                 rname = rest_res.scalar_one_or_none() or "Restaurante"
-                # Verificar si el restaurante tiene platos; si no, reasignar a Restinga (solo por seguridad)
-                menu_check = await db.execute(select(Menu).where(Menu.id_restaurante == rid, Menu.activo).limit(1))
-                if not menu_check.scalar_one_or_none():
-                    logger.warning(f"Cliente {phone} tiene restaurante {rid} sin menú. Reasignando a Restinga.")
-                    rest_query = select(Restaurante).where(Restaurante.nombre == 'Restinga', Restaurante.activo).limit(1)
-                    rest_res2 = await db.execute(rest_query)
-                    rest = rest_res2.scalar_one_or_none()
-                    if rest:
-                        rid = rest.id_restaurante
-                        rname = rest.nombre
-                        cli.id_restaurante = rid
-                        await db.flush()
-                        logger.info(f"Cliente {phone} reasignado a Restinga")
 
             lang = cli.language_pref
 
@@ -472,7 +458,12 @@ async def process_msg(payload: dict):
                     selected = next((item for item in menu_items if item["num"] == num), None)
                     if selected:
                         carrito = list(ctx.get("carrito", []))
-                        carrito.append({"id": selected["id_plato"], "nombre": selected["nombre"], "precio": selected["precio"]})
+                        # 🔧 FIX: convertir UUID a string para JSON serializable
+                        carrito.append({
+                            "id": str(selected["id_plato"]),
+                            "nombre": selected["nombre"],
+                            "precio": selected["precio"]
+                        })
                         ctx["carrito"] = carrito
                         total = sum(item["precio"] for item in carrito)
                         reply = t("added", lang, plato=selected["nombre"], total=total)
@@ -546,7 +537,7 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("help", lang)
 
-            # FLUJO RESERVAS (igual que antes)
+            # FLUJO RESERVAS
             elif fase == "res_p":
                 if txt.isdigit():
                     ctx["res_personas"] = int(txt)
@@ -627,7 +618,7 @@ async def process_msg(payload: dict):
                 ctx["carrito"] = []
                 reply = t("reset", lang)
 
-            # Guardar contexto
+            # Guardar contexto (ahora sin UUIDs)
             conv.contexto_bot = ctx
             conv.last_message_at = now_utc()
             await db.commit()
@@ -637,7 +628,7 @@ async def process_msg(payload: dict):
         logger.error(f"Webhook error: {e}", exc_info=True)
 
 # ============================================================
-# ENDPOINTS STAFF (sin cambios, igual que antes)
+# ENDPOINTS STAFF (igual que antes, sin cambios)
 # ============================================================
 @app.patch("/api/v1/reservaciones/{id}/confirmar")
 async def confirmar_reserva(id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key)):
@@ -756,7 +747,7 @@ async def reservas_hoy_api(restaurante_id: uuid.UUID = Depends(get_restaurante_f
         return [{"id": str(r.id_reserva), "codigo_reserva": r.codigo_reserva, "nombre_cliente": None, "num_personas": r.num_personas, "hora_reserva": r.hora_reserva.strftime("%H:%M"), "mesa_asignada": r.mesa_asignada, "zona": r.zona, "estado": r.estado.value} for r in reservas]
 
 # ============================================================
-# PANEL HTML (igual que antes, con emojis en footer)
+# PANEL HTML (igual, sin cambios)
 # ============================================================
 LOGIN_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
@@ -773,7 +764,7 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></table>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
 tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
 function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
@@ -836,7 +827,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "15.5", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "15.6", "db": "online" if engine else "offline"}
 
 @app.get("/api/whatsapp/webhook")
 def wb_verify(req: Request):
