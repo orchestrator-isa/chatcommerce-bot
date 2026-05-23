@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v16.0 - PERSISTENCIA ROBUSTA
-- Elimina conversación en 'q' y crea una nueva limpia.
-- Detección automática de idioma por palabra clave (hola, hello, bonjour, salam...).
-- Paginación: n → Siguiente, a → Anterior (con emojis).
-- 33 platos por página (cambiable).
-- Soporte para 7 idiomas en selector (es, en, fr, dar, ar, tr, de).
-- Función de limpieza recursiva para evitar errores de serialización.
+ORQUESTRATOR ISA v16.1 - FINAL
+- PDF del menú descargable
+- Detección automática de idioma (hola, hello, bonjour, salam...)
+- Comando 'q' elimina conversación y crea una nueva limpia (100% funcional)
+- Paginación n/a, menú de 33 platos por página
+- Panel con pestañas (aún en construcción, pero con endpoints base)
 """
 
 import os
@@ -19,8 +18,17 @@ from enum import Enum
 from decimal import Decimal
 import textwrap
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Form, Header
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    BackgroundTasks,
+    Request,
+    Form,
+    Header,
+    Depends,
+)
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -36,6 +44,7 @@ from sqlalchemy import (
     Date,
     select,
     and_,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
@@ -72,6 +81,14 @@ if DATABASE_URL:
         engine, class_=AsyncSession, expire_on_commit=False
     )
     logger.info("✅ Engine DB inicializado (Neon)")
+
+# ============================================================
+# STATIC FILES (PDF)
+# ============================================================
+os.makedirs("static", exist_ok=True)
+app = FastAPI(title="Orquestrator ISA v16.1")
+app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ============================================================
@@ -255,13 +272,6 @@ class ReservaHistorial(Base):
 
 
 # ============================================================
-# APP
-# ============================================================
-app = FastAPI(title="Orquestrator ISA v16.0")
-app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
-
-
-# ============================================================
 # HELPERS
 # ============================================================
 async def send_wa(phone: str, text: str):
@@ -332,10 +342,9 @@ async def get_restaurante_from_api_key(
 
 
 # ============================================================
-# FUNCIÓN RECURSIVA PARA LIMPIAR OBJETOS NO SERIALIZABLES
+# LIMPIEZA RECURSIVA PARA JSON
 # ============================================================
 def clean_serializable(obj):
-    """Convierte UUID, datetime, date, time, Decimal a str, y recursivamente limpia listas/dicts."""
     if isinstance(obj, uuid.UUID):
         return str(obj)
     if isinstance(obj, (datetime, date)):
@@ -352,7 +361,7 @@ def clean_serializable(obj):
 
 
 # ============================================================
-# DETECCIÓN AUTOMÁTICA DE IDIOMA POR PALABRA CLAVE
+# DETECCIÓN AUTOMÁTICA DE IDIOMA
 # ============================================================
 IDIOMA_KEYWORDS = {
     "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido"],
@@ -375,14 +384,14 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
 
 
 # ============================================================
-# TRADUCCIONES (con 7 idiomas en selector)
+# TRADUCCIONES
 # ============================================================
 I18N = {
     "es": {
-        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma o escribe una palabra:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n🇸🇦 a → العربية\n🇹🇷 t → Türkçe\n🇩🇪 l → Deutsch",
+        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma o escribe una palabra:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n🇸🇦 a → العربية\n🇹🇷 t → Türkçe\n🇩🇪 l → Deutsch\n\n📄 Para descargar el menú en PDF: `menu pdf`",
         "menu_header": "📋 *MENÚ* (Página {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n🛒 Añade un número para agregar",
+        "menu_footer": "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n🛒 Añade un número para agregar\n📄 `menu pdf` para descargar el menú",
         "added": "✅ {plato} añadido. Total: {total} MAD.",
         "cart": "🛒 *PEDIDO*\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Carrito vacío.",
@@ -391,7 +400,7 @@ I18N = {
         "removed": "🗑️ {plato} eliminado. Total: {total} MAD.",
         "invalid": "❌ Opción inválida.",
         "reset": "🔄 Sesión reiniciada (nueva conversación).",
-        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` o `reservar` → Reservar mesa\n`q` → Salir (borra conversación)",
+        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` o `reservar` → Reservar mesa\n`q` → Salir (borra conversación)\n`menu pdf` → Descargar menú en PDF",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)\nEj: 19:30",
@@ -404,10 +413,10 @@ I18N = {
         "res_error_capacity": "❌ Máximo {max} personas por reserva.",
     },
     "en": {
-        "welcome": "🌍 Welcome to {restaurante}\nChoose language or type a word:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n🇸🇦 a → Arabic\n🇹🇷 t → Turkish\n🇩🇪 l → German",
+        "welcome": "🌍 Welcome to {restaurante}\nChoose language or type a word:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n🇸🇦 a → Arabic\n🇹🇷 t → Turkish\n🇩🇪 l → German\n\n📄 To download the PDF menu: `menu pdf`",
         "menu_header": "📋 *MENU* (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply a number to add",
+        "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply a number to add\n📄 `menu pdf` to download the menu",
         "added": "✅ {plato} added. Total: {total} MAD.",
         "cart": "🛒 *ORDER*\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Cart empty.",
@@ -416,7 +425,7 @@ I18N = {
         "removed": "🗑️ {plato} removed. Total: {total} MAD.",
         "invalid": "❌ Invalid option.",
         "reset": "🔄 Session restarted (new conversation).",
-        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`r` or `reservar` → Book table\n`q` → Exit (clear conversation)",
+        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`r` or `reservar` → Book table\n`q` → Exit (clear conversation)\n`menu pdf` → Download PDF menu",
         "res_personas": "👥 How many people? (reply a number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)\nEx: 2026-05-25",
         "res_hora": "🕐 Time? (HH:MM)\nEx: 19:30",
@@ -436,7 +445,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
     return text.format(**kwargs)
 
 
-ITEMS_PER_PAGE = 33  # puedes cambiarlo a 45 si prefieres
+ITEMS_PER_PAGE = 33
 
 
 async def get_menu_page(
@@ -487,6 +496,19 @@ async def get_menu_page(
 
 
 # ============================================================
+# ENDPOINT PARA DESCARGAR EL PDF
+# ============================================================
+@app.get("/menu/pdf")
+async def descargar_menu_pdf():
+    pdf_path = "static/Restinga_Digital_Menu.pdf"
+    if not os.path.exists(pdf_path):
+        raise HTTPException(404, "PDF no encontrado")
+    return FileResponse(
+        pdf_path, media_type="application/pdf", filename="Menu_Restinga.pdf"
+    )
+
+
+# ============================================================
 # BOT: PROCESAMIENTO DE MENSAJES
 # ============================================================
 async def process_msg(payload: dict):
@@ -509,7 +531,6 @@ async def process_msg(payload: dict):
             cli = res_c.scalar_one_or_none()
 
             if not cli:
-                # Cliente nuevo: asignar Restinga
                 rest_query = (
                     select(Restaurante)
                     .where(Restaurante.nombre == "Restinga", Restaurante.activo)
@@ -567,6 +588,13 @@ async def process_msg(payload: dict):
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
+            # --- Comando especial para PDF ---
+            if txt == "menu pdf":
+                pdf_url = "https://chatcommerce-bot.onrender.com/menu/pdf"
+                reply = f"📄 *Menú Digital de Restinga*\nPuedes descargarlo aquí: {pdf_url}\n\nTambién puedes usar el comando `m` para ver el menú interactivo."
+                await send_wa(phone, reply)
+                return
+
             reply = ""
             fase = ctx["fase"]
             lang_map = {
@@ -600,11 +628,10 @@ async def process_msg(payload: dict):
                 "7": "de",
             }
 
-            # FLUJO IDIOMA (incluye detección automática por palabra clave)
+            # FLUJO IDIOMA (incluye detección por palabra clave)
             if fase == "lang" or txt in ("q", "salir", "quit"):
                 new_lang = lang_map.get(txt)
                 if not new_lang:
-                    # Detección automática por palabra clave
                     new_lang = detectar_idioma_por_keyword(txt)
                 if new_lang:
                     lang = new_lang
@@ -794,7 +821,7 @@ async def process_msg(payload: dict):
                         reply = t("res_personas", lang)
 
                 elif txt in ("q", "salir", "quit"):
-                    # ★★★ ELIMINAR CONVERSACIÓN ACTUAL Y CREAR UNA NUEVA LIMPIA ★★★
+                    # ★★★ ELIMINAR CONVERSACIÓN Y CREAR UNA NUEVA LIMPIA ★★★
                     await db.delete(conv)
                     nueva_conv = Conversacion(
                         id_cliente=cli.id_cliente,
@@ -808,9 +835,10 @@ async def process_msg(payload: dict):
                     )
                     db.add(nueva_conv)
                     await db.commit()
+                    # Enviamos el mensaje de bienvenida con el selector
                     reply = t("welcome", lang, restaurante=rname)
                     await send_wa(phone, reply)
-                    return  # Salimos para no volver a guardar nada más
+                    return
 
                 else:
                     reply = t("help", lang)
@@ -923,7 +951,7 @@ async def process_msg(payload: dict):
                 ctx["carrito"] = []
                 reply = t("reset", lang)
 
-            # Si no hemos salido por el 'q', guardamos el contexto limpio
+            # Si no hemos salido por 'q', guardamos el contexto limpio
             if txt not in ("q", "salir", "quit"):
                 ctx_limpio = clean_serializable(ctx)
                 conv.contexto_bot = ctx_limpio
@@ -941,12 +969,252 @@ async def process_msg(payload: dict):
 
 
 # ============================================================
-# ENDPOINTS STAFF (igual que antes, se omiten por brevedad – debes copiar los tuyos)
+# ENDPOINTS STAFF (COPIA LOS QUE YA TENÍAS)
 # ============================================================
-# ... (tus endpoints: confirmar_reserva, cancelar_reserva, asignar-mesa, marcar-sentada, pedidos_activos, dashboard_hoy, reservas_hoy_api)
+@app.patch("/api/v1/reservaciones/{id}/confirmar")
+async def confirmar_reserva(
+    id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key)
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Reservacion).where(
+                Reservacion.id_reserva == id,
+                Reservacion.id_restaurante == restaurante_id,
+            )
+        )
+        reserva = result.scalar_one_or_none()
+        if not reserva:
+            raise HTTPException(404, "Reserva no encontrada")
+        if reserva.estado != EstadoReserva.pendiente:
+            raise HTTPException(400, "Solo se puede confirmar una reserva pendiente")
+        reserva.estado = EstadoReserva.confirmada
+        await db.commit()
+        return {"status": "ok", "nuevo_estado": reserva.estado.value}
+
+
+@app.patch("/api/v1/reservaciones/{id}/cancelar")
+async def cancelar_reserva(
+    id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key)
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Reservacion).where(
+                Reservacion.id_reserva == id,
+                Reservacion.id_restaurante == restaurante_id,
+            )
+        )
+        reserva = result.scalar_one_or_none()
+        if not reserva:
+            raise HTTPException(404, "Reserva no encontrada")
+        if reserva.estado in (EstadoReserva.cancelada, EstadoReserva.completada):
+            raise HTTPException(400, "La reserva ya está cancelada o completada")
+        reserva.estado = EstadoReserva.cancelada
+        await db.commit()
+        return {"status": "ok", "nuevo_estado": reserva.estado.value}
+
+
+@app.patch("/api/v1/reservaciones/{id}/asignar-mesa")
+async def asignar_mesa_reserva(
+    id: uuid.UUID,
+    request: Request,
+    restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key),
+    mesa: str = Form(...),
+    zona: str = Form(None),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Reservacion).where(
+                Reservacion.id_reserva == id,
+                Reservacion.id_restaurante == restaurante_id,
+            )
+        )
+        reserva = result.scalar_one_or_none()
+        if not reserva:
+            raise HTTPException(404, "Reserva no encontrada")
+        if reserva.estado not in (EstadoReserva.pendiente, EstadoReserva.confirmada):
+            raise HTTPException(400, "No se puede asignar mesa en este estado")
+        reserva.mesa_asignada = mesa
+        reserva.zona = zona
+        await db.commit()
+        return {"status": "ok", "mesa": mesa, "zona": zona}
+
+
+@app.patch("/api/v1/reservaciones/{id}/marcar-sentada")
+async def marcar_sentada(
+    id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key)
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Reservacion).where(
+                Reservacion.id_reserva == id,
+                Reservacion.id_restaurante == restaurante_id,
+            )
+        )
+        reserva = result.scalar_one_or_none()
+        if not reserva:
+            raise HTTPException(404, "Reserva no encontrada")
+        if not reserva.mesa_asignada:
+            raise HTTPException(400, "Primero asigna una mesa")
+        if reserva.estado != EstadoReserva.confirmada:
+            raise HTTPException(
+                400, "Solo se puede marcar sentada una reserva confirmada"
+            )
+        reserva.estado = EstadoReserva.sentada
+        await db.commit()
+        return {"status": "ok", "nuevo_estado": reserva.estado.value}
+
+
+@app.get("/api/v1/pedidos/activos")
+async def pedidos_activos(
+    restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Pedido)
+            .where(
+                Pedido.id_restaurante == restaurante_id,
+                Pedido.estado.in_([EstadoPedido.pendiente, EstadoPedido.confirmado]),
+            )
+            .order_by(Pedido.created_at.desc())
+        )
+        pedidos = result.scalars().all()
+        return [
+            {
+                "id": str(p.id_pedido),
+                "cliente": str(p.id_cliente),
+                "total": float(p.total),
+                "estado": p.estado.value,
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in pedidos
+        ]
+
+
+@app.patch("/api/v1/pedidos/{id}/estado")
+async def cambiar_estado_pedido(
+    id: uuid.UUID,
+    nuevo_estado: str,
+    restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Pedido).where(
+                Pedido.id_pedido == id, Pedido.id_restaurante == restaurante_id
+            )
+        )
+        pedido = result.scalar_one_or_none()
+        if not pedido:
+            raise HTTPException(404, "Pedido no encontrado")
+        try:
+            nuevo = EstadoPedido(nuevo_estado)
+        except ValueError:
+            raise HTTPException(400, "Estado inválido")
+        pedido.estado = nuevo
+        await db.commit()
+        return {"status": "ok", "nuevo_estado": nuevo.value}
+
+
+@app.get("/api/v1/dashboard/hoy")
+async def dashboard_hoy(
+    restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        today = datetime.now(timezone.utc).date()
+        start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        end = datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc)
+
+        total_ingresos = await db.scalar(
+            select(func.sum(Pedido.total)).where(
+                Pedido.id_restaurante == restaurante_id,
+                Pedido.created_at.between(start, end),
+            )
+        ) or Decimal(0)
+        total_pedidos = (
+            await db.scalar(
+                select(func.count(Pedido.id_pedido)).where(
+                    Pedido.id_restaurante == restaurante_id,
+                    Pedido.created_at.between(start, end),
+                )
+            )
+            or 0
+        )
+        total_reservas = (
+            await db.scalar(
+                select(func.count(Reservacion.id_reserva)).where(
+                    Reservacion.id_restaurante == restaurante_id,
+                    Reservacion.fecha_reserva == today,
+                )
+            )
+            or 0
+        )
+        month_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        nuevos_clientes = (
+            await db.scalar(
+                select(func.count(Cliente.id_cliente)).where(
+                    Cliente.id_restaurante == restaurante_id,
+                    Cliente.created_at >= month_ago,
+                )
+            )
+            or 0
+        )
+
+        return {
+            "ingresos_hoy": float(total_ingresos),
+            "pedidos_hoy": total_pedidos,
+            "reservas_hoy": total_reservas,
+            "clientes_nuevos_30d": nuevos_clientes,
+            "fecha": today.isoformat(),
+        }
+
+
+@app.get("/api/v1/reservaciones/hoy")
+async def reservas_hoy_api(
+    restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        today = datetime.now(timezone.utc).date()
+        result = await db.execute(
+            select(Reservacion)
+            .where(
+                Reservacion.id_restaurante == restaurante_id,
+                Reservacion.fecha_reserva == today,
+            )
+            .order_by(Reservacion.hora_reserva)
+        )
+        reservas = result.scalars().all()
+        return [
+            {
+                "id": str(r.id_reserva),
+                "codigo_reserva": r.codigo_reserva,
+                "nombre_cliente": None,
+                "num_personas": r.num_personas,
+                "hora_reserva": r.hora_reserva.strftime("%H:%M"),
+                "mesa_asignada": r.mesa_asignada,
+                "zona": r.zona,
+                "estado": r.estado.value,
+            }
+            for r in reservas
+        ]
+
 
 # ============================================================
-# PANEL HTML (mismo que antes, con las pestañas pendientes de implementar)
+# PANEL HTML (básico)
 # ============================================================
 LOGIN_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
@@ -963,9 +1231,9 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
-tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}<td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy<tr></tr>';return;}
+tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<td><td colspan="5" class="text-center">No hay pedidos activos</td></table>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
@@ -1040,7 +1308,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "16.0", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "16.1", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
