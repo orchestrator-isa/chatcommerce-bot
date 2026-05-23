@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v15.7 - PERSISTENCIA TOTAL
-- Conversión recursiva de UUID/datetime/Decimal a tipos JSON serializables.
-- Carrito y menú con strings en lugar de UUID nativos.
+ORQUESTRATOR ISA v16.0 - PERSISTENCIA ROBUSTA
+- Elimina conversación en 'q' y crea una nueva limpia.
+- Detección automática de idioma por palabra clave (hola, hello, bonjour, salam...).
 - Paginación: n → Siguiente, a → Anterior (con emojis).
 - 33 platos por página (cambiable).
-- Soporte para 7 idiomas (es, en, fr, dar, ar, tr, de) en selector.
+- Soporte para 7 idiomas en selector (es, en, fr, dar, ar, tr, de).
+- Función de limpieza recursiva para evitar errores de serialización.
 """
 
 import os
@@ -74,7 +75,7 @@ if DATABASE_URL:
 
 
 # ============================================================
-# MODELOS
+# MODELOS (igual que antes)
 # ============================================================
 class Base(DeclarativeBase):
     pass
@@ -256,7 +257,7 @@ class ReservaHistorial(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v15.7")
+app = FastAPI(title="Orquestrator ISA v16.0")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
@@ -351,11 +352,34 @@ def clean_serializable(obj):
 
 
 # ============================================================
+# DETECCIÓN AUTOMÁTICA DE IDIOMA POR PALABRA CLAVE
+# ============================================================
+IDIOMA_KEYWORDS = {
+    "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido"],
+    "en": ["hello", "hi", "thanks", "want", "menu", "order"],
+    "fr": ["bonjour", "merci", "je veux", "menu"],
+    "dar": ["salam", "marhba", "bghit", "menu"],
+    "ar": ["سلام", "مرحبا", "قائمة"],
+    "tr": ["merhaba", "teşekkürler", "menü"],
+    "de": ["hallo", "danke", "menü"],
+}
+
+
+def detectar_idioma_por_keyword(txt: str) -> str | None:
+    txt_lower = txt.lower()
+    for idioma, palabras in IDIOMA_KEYWORDS.items():
+        for palabra in palabras:
+            if palabra in txt_lower:
+                return idioma
+    return None
+
+
+# ============================================================
 # TRADUCCIONES (con 7 idiomas en selector)
 # ============================================================
 I18N = {
     "es": {
-        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n🇸🇦 a → العربية\n🇹🇷 t → Türkçe\n🇩🇪 l → Deutsch",
+        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma o escribe una palabra:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n🇸🇦 a → العربية\n🇹🇷 t → Türkçe\n🇩🇪 l → Deutsch",
         "menu_header": "📋 *MENÚ* (Página {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
         "menu_footer": "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n🛒 Añade un número para agregar",
@@ -366,8 +390,8 @@ I18N = {
         "confirm_empty": "⚠️ Carrito vacío.",
         "removed": "🗑️ {plato} eliminado. Total: {total} MAD.",
         "invalid": "❌ Opción inválida.",
-        "reset": "🔄 Sesión reiniciada.",
-        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` o `reservar` → Reservar mesa\n`q` → Salir",
+        "reset": "🔄 Sesión reiniciada (nueva conversación).",
+        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` o `reservar` → Reservar mesa\n`q` → Salir (borra conversación)",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)\nEj: 19:30",
@@ -380,7 +404,7 @@ I18N = {
         "res_error_capacity": "❌ Máximo {max} personas por reserva.",
     },
     "en": {
-        "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n🇸🇦 a → Arabic\n🇹🇷 t → Turkish\n🇩🇪 l → German",
+        "welcome": "🌍 Welcome to {restaurante}\nChoose language or type a word:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n🇸🇦 a → Arabic\n🇹🇷 t → Turkish\n🇩🇪 l → German",
         "menu_header": "📋 *MENU* (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
         "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply a number to add",
@@ -391,8 +415,8 @@ I18N = {
         "confirm_empty": "⚠️ Cart empty.",
         "removed": "🗑️ {plato} removed. Total: {total} MAD.",
         "invalid": "❌ Invalid option.",
-        "reset": "🔄 Session restarted.",
-        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`r` or `reservar` → Book table\n`q` → Quit",
+        "reset": "🔄 Session restarted (new conversation).",
+        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → View order\n`c` → Confirm\n`x N` → Remove item N\n`r` or `reservar` → Book table\n`q` → Exit (clear conversation)",
         "res_personas": "👥 How many people? (reply a number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)\nEx: 2026-05-25",
         "res_hora": "🕐 Time? (HH:MM)\nEx: 19:30",
@@ -412,7 +436,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
     return text.format(**kwargs)
 
 
-ITEMS_PER_PAGE = 33  # puedes cambiarlo a 45 si quieres
+ITEMS_PER_PAGE = 33  # puedes cambiarlo a 45 si prefieres
 
 
 async def get_menu_page(
@@ -454,7 +478,7 @@ async def get_menu_page(
         menu_items.append(
             {
                 "num": idx,
-                "id_plato": str(p.id_plato),  # ✅ string
+                "id_plato": str(p.id_plato),
                 "nombre": nombre,
                 "precio": float(p.precio),
             }
@@ -463,7 +487,7 @@ async def get_menu_page(
 
 
 # ============================================================
-# BOT: PROCESAMIENTO DE MENSAJES (con limpieza recursiva)
+# BOT: PROCESAMIENTO DE MENSAJES
 # ============================================================
 async def process_msg(payload: dict):
     if not async_session_maker:
@@ -524,7 +548,12 @@ async def process_msg(payload: dict):
                 conv = Conversacion(
                     id_cliente=cli.id_cliente,
                     id_restaurante=rid,
-                    contexto_bot={"fase": "lang", "carrito": [], "menu_page": 1},
+                    contexto_bot={
+                        "fase": "lang",
+                        "carrito": [],
+                        "menu_page": 1,
+                        "current_menu_page_dishes": [],
+                    },
                 )
                 db.add(conv)
                 await db.flush()
@@ -571,9 +600,12 @@ async def process_msg(payload: dict):
                 "7": "de",
             }
 
-            # FLUJO IDIOMA
+            # FLUJO IDIOMA (incluye detección automática por palabra clave)
             if fase == "lang" or txt in ("q", "salir", "quit"):
                 new_lang = lang_map.get(txt)
+                if not new_lang:
+                    # Detección automática por palabra clave
+                    new_lang = detectar_idioma_por_keyword(txt)
                 if new_lang:
                     lang = new_lang
                     ctx["lang"] = lang
@@ -677,7 +709,6 @@ async def process_msg(payload: dict):
                     )
                     if selected:
                         carrito = list(ctx.get("carrito", []))
-                        # ✅ convertir UUID a string
                         carrito.append(
                             {
                                 "id": str(selected["id_plato"]),
@@ -763,15 +794,28 @@ async def process_msg(payload: dict):
                         reply = t("res_personas", lang)
 
                 elif txt in ("q", "salir", "quit"):
-                    ctx["fase"] = "lang"
-                    ctx["carrito"] = []
-                    ctx["menu_page"] = 1
-                    ctx["current_menu_page_dishes"] = []
-                    reply = t("reset", lang)
+                    # ★★★ ELIMINAR CONVERSACIÓN ACTUAL Y CREAR UNA NUEVA LIMPIA ★★★
+                    await db.delete(conv)
+                    nueva_conv = Conversacion(
+                        id_cliente=cli.id_cliente,
+                        id_restaurante=rid,
+                        contexto_bot={
+                            "fase": "lang",
+                            "carrito": [],
+                            "menu_page": 1,
+                            "current_menu_page_dishes": [],
+                        },
+                    )
+                    db.add(nueva_conv)
+                    await db.commit()
+                    reply = t("welcome", lang, restaurante=rname)
+                    await send_wa(phone, reply)
+                    return  # Salimos para no volver a guardar nada más
+
                 else:
                     reply = t("help", lang)
 
-            # FLUJO RESERVAS
+            # FLUJO RESERVAS (igual que antes)
             elif fase == "res_p":
                 if txt.isdigit():
                     ctx["res_personas"] = int(txt)
@@ -879,21 +923,17 @@ async def process_msg(payload: dict):
                 ctx["carrito"] = []
                 reply = t("reset", lang)
 
-            # ------------------------------------------------------------
-            # ⭐ LIMPIEZA TOTAL DEL CONTEXTO ANTES DE GUARDAR ⭐
-            # Convierte cualquier UUID, datetime, date, time, Decimal a string/float
-            ctx_limpio = clean_serializable(ctx)
-            # ------------------------------------------------------------
-
-            conv.contexto_bot = ctx_limpio
-            conv.last_message_at = now_utc()
-            try:
-                await db.commit()
-                logger.info("✅ Contexto guardado correctamente")
-            except Exception as commit_err:
-                logger.error(f"❌ Error en commit: {commit_err}", exc_info=True)
-                await db.rollback()
-                # No re-lanzamos para que el bot al menos responda
+            # Si no hemos salido por el 'q', guardamos el contexto limpio
+            if txt not in ("q", "salir", "quit"):
+                ctx_limpio = clean_serializable(ctx)
+                conv.contexto_bot = ctx_limpio
+                conv.last_message_at = now_utc()
+                try:
+                    await db.commit()
+                    logger.info("✅ Contexto guardado correctamente")
+                except Exception as commit_err:
+                    logger.error(f"❌ Error en commit: {commit_err}", exc_info=True)
+                    await db.rollback()
             await send_wa(phone, reply)
 
     except Exception as e:
@@ -901,17 +941,12 @@ async def process_msg(payload: dict):
 
 
 # ============================================================
-# ENDPOINTS STAFF (sin cambios, se omiten por brevedad – pero debes incluirlos)
+# ENDPOINTS STAFF (igual que antes, se omiten por brevedad – debes copiar los tuyos)
 # ============================================================
-# ... (tus endpoints: confirmar_reserva, cancelar_reserva, asignar-mesa, etc.)
-# ... (tus rutas del panel: login, recepcion, metricas, etc.)
-# ============================================================
-# Por razones de espacio no repito aquí los endpoints staff (están en tu código anterior)
-# Asegúrate de copiarlos desde tu versión funcional.
-# ============================================================
+# ... (tus endpoints: confirmar_reserva, cancelar_reserva, asignar-mesa, marcar-sentada, pedidos_activos, dashboard_hoy, reservas_hoy_api)
 
 # ============================================================
-# PANEL HTML (mismo que antes, no requiere cambios)
+# PANEL HTML (mismo que antes, con las pestañas pendientes de implementar)
 # ============================================================
 LOGIN_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
@@ -928,8 +963,8 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></table>';return;}
-tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}<td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
+tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}<td><td class="border p-2">${r.estado}</td></tr>`).join('');}
 function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
@@ -1005,7 +1040,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "15.7", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "16.0", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
