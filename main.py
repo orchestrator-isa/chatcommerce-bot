@@ -270,7 +270,7 @@ I18N = {
         "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija",
         "menu_header": "📋 *MENU* (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n➡️ *Next* → `d` ➡️\n⬅️ *Prev* → `a` ⬅️\nReply a number to add",
+        "menu_footer": "\n➡️ *Next* → `n` ➡️\n⬅️ *Prev* → `a` ⬅️\nReply a number to add",
         "added": "✅ {plato} added. Total: {total} MAD.",
         "cart": "🛒 *ORDER*\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Cart empty.",
@@ -297,7 +297,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
     text = I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
     return text.format(**kwargs)
 
-ITEMS_PER_PAGE = 10
+ITEMS_PER_PAGE = 45 
 
 async def get_menu_page(db: AsyncSession, restaurante_id: uuid.UUID, lang: str, page: int):
     menu_query = select(Menu.id_menu).where(Menu.id_restaurante == restaurante_id, Menu.activo)
@@ -425,7 +425,7 @@ async def process_msg(payload: dict):
                     items_text = "\n".join(t("menu_item", lang, num=it["num"], nombre=it["nombre"], precio=it["precio"]) for it in menu_items)
                     reply = header + items_text + t("menu_footer", lang)
 
-                elif txt in ("d", "siguiente", "next", ">", "->"):
+                elif txt in ("n", "siguiente", "next", ">", "->"):
                     page = ctx.get("menu_page", 1)
                     _, total_pages = await get_menu_page(db, rid, lang, 1)
                     if page < total_pages:
