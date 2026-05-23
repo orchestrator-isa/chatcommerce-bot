@@ -320,7 +320,7 @@ async def get_menu_page(db: AsyncSession, restaurante_id: uuid.UUID, lang: str, 
     menu_items = []
     for idx, p in enumerate(page_platos, start=1):
         nombre = trans[p.id_plato].nombre if p.id_plato in trans else f"Plato {p.id_plato}"
-        menu_items.append({"num": idx, "id_plato": p.id_plato, "nombre": nombre, "precio": float(p.precio)})
+        menu_items.append({"num": idx, "id_plato":str(p.id_plato), "nombre": nombre, "precio": float(p.precio)})
     return menu_items, total_pages
 
 # ============================================================
