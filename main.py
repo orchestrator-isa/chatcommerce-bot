@@ -297,7 +297,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
     text = I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
     return text.format(**kwargs)
 
-ITEMS_PER_PAGE = 45 
+ITEMS_PER_PAGE = 33 
 
 async def get_menu_page(db: AsyncSession, restaurante_id: uuid.UUID, lang: str, page: int):
     menu_query = select(Menu.id_menu).where(Menu.id_restaurante == restaurante_id, Menu.activo)
