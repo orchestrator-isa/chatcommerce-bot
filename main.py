@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v17.3 - DEFINITIVO CON CORRECCIONES
+ORQUESTRATOR ISA v17.4 - DEFINITIVO
 ======================================================================
-✅ q resetea completamente (elimina conversaciones, nueva limpia, commit forzado)
-✅ Detección de idioma por palabra clave en cualquier fase (hola, hello, bonjour...)
-✅ Commit con try/except y logs
-✅ Numeración global de platos, cantidades (5 33), PDF desde BD
-✅ Panel Tailwind, endpoints staff completos
+✅ Cualquier palabra con keyword de idioma (hola, hello, bonjour, salam, etc.)
+   → muestra selector de idioma en ese idioma, sin cambiar automáticamente al menú.
+✅ q resetea completamente (elimina conversaciones, nueva limpia, fase "lang").
+✅ Soporte para cantidades (5 33), numeración global de platos.
+✅ Panel HTML con Tailwind, endpoints staff completos.
+✅ PDF desde base de datos.
 ======================================================================
 """
 
@@ -199,7 +200,7 @@ class MenuPDF(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v17.3")
+app = FastAPI(title="Orquestrator ISA v17.4")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 # ============================================================
@@ -477,7 +478,7 @@ async def process_msg(payload: dict):
             }
 
             # --------------------------------------------------------------
-            # 1. FLUJO IDIOMA (incluye detección por keyword y fase "lang")
+            # 1. FLUJO IDIOMA (para fase "lang" o cuando se pide reiniciar)
             # --------------------------------------------------------------
             if fase == "lang" or txt in ("q", "salir", "quit"):
                 new_lang = lang_map.get(txt)
@@ -501,35 +502,29 @@ async def process_msg(payload: dict):
                     reply = t("welcome", lang, restaurante=rname)
 
             # --------------------------------------------------------------
-            # 2. FLUJO MENÚ (con detección de idioma incluso si fase es menu)
+            # 2. FLUJO MENÚ (incluye detección de palabra clave para mostrar selector)
             # --------------------------------------------------------------
             elif fase == "menu":
-                # DETECCIÓN DE IDIOMA POR PALABRA CLAVE (cualquier palabra) - SIEMPRE
+                # DETECCIÓN DE PALABRA CLAVE – muestra el selector de idioma en el idioma detectado
                 detected_lang = detectar_idioma_por_keyword(txt)
-                if detected_lang and detected_lang != lang:
-                    # Cambiar idioma, reiniciar menú y mostrar
-                    lang = detected_lang
-                    ctx["lang"] = lang
-                    cli.language_pref = lang
-                    ctx["fase"] = "menu"
-                    ctx["menu_page"] = 1
+                if detected_lang:
+                    # Cambiar la fase a "lang" para que el próximo mensaje pida la letra
+                    ctx["fase"] = "lang"
+                    # Opcional: limpiar carrito y página para empezar limpio
                     ctx["carrito"] = []
+                    ctx["menu_page"] = 1
                     ctx["current_menu_page_dishes"] = []
-                    await db.flush()
-                    menu_items, total_pages = await get_menu_page(db, rid, lang, 1)
-                    ctx["current_menu_page_dishes"] = menu_items
-                    header = t("menu_header", lang, page=1, total_pages=total_pages)
-                    items_text = "\n".join(t("menu_item", lang, num=it["num"], nombre=it["nombre"], precio=it["precio"]) for it in menu_items)
-                    reply = header + items_text + t("menu_footer", lang)
-                    # Guardar contexto
+                    # Guardar el contexto (sin cambiar el idioma del cliente todavía)
                     conv.contexto_bot = clean_serializable(ctx)
                     conv.last_message_at = now_utc()
                     try:
                         await db.commit()
-                        logger.info("✅ Contexto guardado (detección idioma en menu)")
+                        logger.info("✅ Contexto guardado (detección de palabra clave, fase cambiada a lang)")
                     except Exception as e:
                         logger.error(f"❌ Error commit: {e}", exc_info=True)
                         await db.rollback()
+                    # Responder con el selector de idioma en el idioma detectado
+                    reply = t("welcome", detected_lang, restaurante=rname)
                     await send_wa(phone, reply)
                     return
 
@@ -762,7 +757,7 @@ async def process_msg(payload: dict):
                     reply = t("help", lang)
 
             # --------------------------------------------------------------
-            # 3. FLUJO RESERVAS (compactado, igual que antes)
+            # 3. FLUJO RESERVAS (compactado)
             # --------------------------------------------------------------
             elif fase == "res_p":
                 if txt.isdigit():
@@ -844,7 +839,7 @@ async def process_msg(payload: dict):
                 reply = t("reset", lang)
 
             # Si no hemos enviado respuesta aún, guardamos contexto y enviamos
-            if reply and not (txt in ("q","salir","quit") or txt in ("m","n","a") or txt.isdigit() or (' ' in txt and txt.split()[0].isdigit())):
+            if reply and not (txt in ("q","salir","quit") or txt in ("m","n","a") or txt.isdigit() or (' ' in txt and txt.split()[0].isdigit()) or detectar_idioma_por_keyword(txt)):
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
                 try:
@@ -861,7 +856,7 @@ async def process_msg(payload: dict):
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
 # ============================================================
-# ENDPOINTS STAFF (mismos que antes, se incluyen completos)
+# ENDPOINTS STAFF (mismos que antes)
 # ============================================================
 @app.patch("/api/v1/reservaciones/{id}/confirmar")
 async def confirmar_reserva(id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_from_api_key)):
@@ -995,9 +990,9 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy<tr></tr>';return;}
 tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<td><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
@@ -1058,7 +1053,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "17.3", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "17.4", "db": "online" if engine else "offline"}
 
 @app.get("/api/whatsapp/webhook")
 def wb_verify(req: Request):
