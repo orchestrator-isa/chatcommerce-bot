@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v18.1 - FINAL STABLE
-✅ q (Reset Global): UPDATE atómico con refresh y expire_on_commit.
-✅ Detección de idioma por keyword (funciona en cualquier fase).
-✅ Flujo reservas: res_p -> res_f -> res_h -> res_c.
-✅ Panel Admin + Staff Endpoints + PDF + Broadcast Ready.
-✅ Sin reinicios del worker, persistencia garantizada.
+ORQUESTRATOR ISA v18.2 - CORREGIDO (sin MissingGreenlet)
+- q usa update directo (evita refresh)
+- expire_on_commit=False
+- Detección de idioma precoz
+- Menú paginado, cantidades, carrito, pedidos
+- Panel + endpoints staff + PDF
 """
 
 import os
@@ -45,6 +45,7 @@ from sqlalchemy import (
     and_,
     func,
     LargeBinary,
+    update,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
@@ -67,7 +68,7 @@ if not DATABASE_URL:
     logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
 
 # ============================================================
-# ENGINE DB (con expire_on_commit=True para evitar objetos viejos)
+# ENGINE DB (expire_on_commit=False para evitar greenlet issues)
 # ============================================================
 engine = None
 async_session_maker = None
@@ -79,9 +80,7 @@ if DATABASE_URL:
         DATABASE_URL, pool_pre_ping=True, pool_recycle=300, echo=False
     )
     async_session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=True,  # ✅ clave para evitar stale objects
+        engine, class_=AsyncSession, expire_on_commit=False
     )
     logger.info("✅ Engine DB inicializado (Neon)")
 
@@ -285,7 +284,7 @@ class MenuPDF(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v18.1")
+app = FastAPI(title="Orquestrator ISA v18.2")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
@@ -544,7 +543,7 @@ async def get_menu_pdf(restaurante_id: uuid.UUID):
 
 
 # ============================================================
-# BOT: PROCESAMIENTO DE MENSAJES (v18.1 ESTABLE)
+# BOT: PROCESAMIENTO DE MENSAJES (v18.2 ESTABLE)
 # ============================================================
 async def process_msg(payload: dict):
     if not async_session_maker:
@@ -561,7 +560,7 @@ async def process_msg(payload: dict):
         txt = txt_raw.lower()
 
         async with async_session_maker() as db:
-            # 1. Cliente (con refresh para evitar stale)
+            # 1. Cliente
             stmt_cli = select(Cliente).where(Cliente.wa_id == phone)
             cli = (await db.execute(stmt_cli)).scalar_one_or_none()
             if not cli:
@@ -625,20 +624,24 @@ async def process_msg(payload: dict):
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
-            # --- 0. RESET GLOBAL (q) con manejo robusto ---
+            # --- 0. RESET GLOBAL (q) con update directo (evita greenlet) ---
             if txt in ("q", "salir", "quit"):
                 try:
-                    # Asegurar que el objeto conv está sincronizado
-                    await db.refresh(conv)
-                    # Crear nuevo contexto limpio
                     nuevo_ctx = {
                         "fase": "lang",
                         "carrito": [],
                         "menu_page": 1,
                         "current_menu_page_dishes": [],
                     }
-                    conv.contexto_bot = clean_serializable(nuevo_ctx)
-                    conv.last_message_at = now_utc()
+                    stmt = (
+                        update(Conversacion)
+                        .where(Conversacion.id_cliente == cli.id_cliente)
+                        .values(
+                            contexto_bot=clean_serializable(nuevo_ctx),
+                            last_message_at=now_utc(),
+                        )
+                    )
+                    await db.execute(stmt)
                     await db.commit()
                     logger.info(
                         f"✅ q ejecutado: fase reseteada a 'lang' para {cli.wa_id}"
@@ -646,9 +649,7 @@ async def process_msg(payload: dict):
                 except Exception as e:
                     logger.error(f"❌ Error en q: {e}", exc_info=True)
                     await db.rollback()
-                    # No enviamos mensaje de error, solo salimos
                     return
-                # Enviar bienvenida según el idioma actual del cliente
                 await send_wa(phone, t("welcome", cli.language_pref, restaurante=rname))
                 return
 
@@ -661,7 +662,6 @@ async def process_msg(payload: dict):
                 return
 
             # --- 2. DETECCIÓN DE IDIOMA PRECOZ (Global) ---
-            # Si el usuario escribe "hola" o "salam" en cualquier fase, le mostramos el selector en ese idioma
             detected_lang = detectar_idioma_por_keyword(txt)
             if detected_lang:
                 ctx["fase"] = "lang"
@@ -1019,7 +1019,7 @@ async def process_msg(payload: dict):
 
 
 # ============================================================
-# ENDPOINTS STAFF (igual que en v18.0)
+# ENDPOINTS STAFF (sin cambios, funcionan)
 # ============================================================
 @app.patch("/api/v1/reservaciones/{id}/confirmar")
 async def confirmar_reserva(
@@ -1294,9 +1294,9 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<td><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
-tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<td><td colspan="7" class="text-center">No hay reservas hoy<table><body>';return;}
+tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos<html><body>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
@@ -1371,7 +1371,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "18.1", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "18.2", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
