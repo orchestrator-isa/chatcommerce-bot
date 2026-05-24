@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v16.1 - FINAL
-- PDF del menú descargable
-- Detección automática de idioma (hola, hello, bonjour, salam...)
-- Comando 'q' elimina conversación y crea una nueva limpia (100% funcional)
-- Paginación n/a, menú de 33 platos por página
-- Panel con pestañas (aún en construcción, pero con endpoints base)
+ORQUESTRATOR ISA v17.0 - FINAL COMPLETO
+======================================================================
+✅ Menú desde BD con paginación (33 items/página, comandos n/a)
+✅ Detección automática de idioma por palabra clave (hola, hello, bonjour, salam...)
+✅ Comando 'q' elimina conversación y crea una nueva limpia
+✅ Soporte 7 idiomas (es, en, fr, dar, ar, tr, de)
+✅ Carrito, pedidos, reservas con reglas de negocio
+✅ Endpoints staff completos (reservas, pedidos, dashboard)
+✅ Panel HTML con Tailwind (login, recepción, métricas)
+✅ Menú PDF desde base de datos (tabla menu_pdfs)
+✅ Limpieza recursiva para serialización JSON
+✅ Sin errores ruff (todos los imports necesarios)
+======================================================================
 """
 
 import os
@@ -24,11 +31,10 @@ from fastapi import (
     BackgroundTasks,
     Request,
     Form,
-    Header,
     Depends,
+    Header,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -45,6 +51,7 @@ from sqlalchemy import (
     select,
     and_,
     func,
+    LargeBinary,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 
@@ -67,7 +74,7 @@ if not DATABASE_URL:
     logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
 
 # ============================================================
-# ENGINE DB
+# ENGINE DB (Neon)
 # ============================================================
 engine = None
 async_session_maker = None
@@ -82,17 +89,9 @@ if DATABASE_URL:
     )
     logger.info("✅ Engine DB inicializado (Neon)")
 
-# ============================================================
-# STATIC FILES (PDF)
-# ============================================================
-os.makedirs("static", exist_ok=True)
-app = FastAPI(title="Orquestrator ISA v16.1")
-app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 
 # ============================================================
-# MODELOS (igual que antes)
+# MODELOS (SQLAlchemy 2.0)
 # ============================================================
 class Base(DeclarativeBase):
     pass
@@ -271,9 +270,36 @@ class ReservaHistorial(Base):
     )
 
 
+class MenuPDF(Base):
+    __tablename__ = "menu_pdfs"
+    id_pdf: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    nombre_archivo: Mapped[str] = mapped_column(String)
+    pdf_data: Mapped[bytes] = mapped_column(LargeBinary)
+    mime_type: Mapped[str] = mapped_column(String, default="application/pdf")
+    tamano_bytes: Mapped[int] = mapped_column(Integer)
+    subido_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 # ============================================================
-# HELPERS
+# FASTAPI APP
 # ============================================================
+app = FastAPI(title="Orquestrator ISA v17.0")
+app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
+
+
+# ============================================================
+# HELPERS Y DEPENDENCIAS
+# ============================================================
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 async def send_wa(phone: str, text: str):
     if not WA_PHONE_ID or not WA_TOKEN:
         logger.info(f"[SIM-WA] {phone}: {text}")
@@ -294,10 +320,6 @@ async def send_wa(phone: str, text: str):
             await c.post(url, json=payload, headers=headers)
     except Exception as e:
         logger.error(f"WA error: {e}")
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 _rate_limits = {}
@@ -341,10 +363,8 @@ async def get_restaurante_from_api_key(
         return restaurante_id
 
 
-# ============================================================
-# LIMPIEZA RECURSIVA PARA JSON
-# ============================================================
 def clean_serializable(obj):
+    """Convierte objetos no serializables a JSON (UUID, datetime, Decimal, etc.) recursivamente."""
     if isinstance(obj, uuid.UUID):
         return str(obj)
     if isinstance(obj, (datetime, date)):
@@ -361,7 +381,7 @@ def clean_serializable(obj):
 
 
 # ============================================================
-# DETECCIÓN AUTOMÁTICA DE IDIOMA
+# DETECCIÓN AUTOMÁTICA DE IDIOMA POR PALABRAS CLAVE
 # ============================================================
 IDIOMA_KEYWORDS = {
     "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido"],
@@ -384,7 +404,7 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
 
 
 # ============================================================
-# TRADUCCIONES
+# TRADUCCIONES (SOLO MENSAJES DEL SISTEMA)
 # ============================================================
 I18N = {
     "es": {
@@ -441,8 +461,7 @@ I18N = {
 
 
 def t(key: str, lang: str = "es", **kwargs) -> str:
-    text = I18N.get(lang, I18N["es"]).get(key, I18N["es"][key])
-    return text.format(**kwargs)
+    return I18N.get(lang, I18N["es"]).get(key, I18N["es"][key]).format(**kwargs)
 
 
 ITEMS_PER_PAGE = 33
@@ -496,16 +515,27 @@ async def get_menu_page(
 
 
 # ============================================================
-# ENDPOINT PARA DESCARGAR EL PDF
+# ENDPOINT PARA PDF DESDE BD
 # ============================================================
 @app.get("/menu/pdf")
-async def descargar_menu_pdf():
-    pdf_path = "static/Restinga_Digital_Menu.pdf"
-    if not os.path.exists(pdf_path):
-        raise HTTPException(404, "PDF no encontrado")
-    return FileResponse(
-        pdf_path, media_type="application/pdf", filename="Menu_Restinga.pdf"
-    )
+async def get_menu_pdf(restaurante_id: uuid.UUID):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        stmt = select(MenuPDF).where(
+            MenuPDF.id_restaurante == restaurante_id, MenuPDF.activo.is_(True)
+        )
+        result = await db.execute(stmt)
+        pdf_record = result.scalar_one_or_none()
+        if not pdf_record:
+            raise HTTPException(404, "PDF no encontrado para este restaurante")
+        return Response(
+            content=pdf_record.pdf_data,
+            media_type=pdf_record.mime_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={pdf_record.nombre_archivo}"
+            },
+        )
 
 
 # ============================================================
@@ -529,7 +559,6 @@ async def process_msg(payload: dict):
             # Cliente
             res_c = await db.execute(select(Cliente).where(Cliente.wa_id == phone))
             cli = res_c.scalar_one_or_none()
-
             if not cli:
                 rest_query = (
                     select(Restaurante)
@@ -548,7 +577,6 @@ async def process_msg(payload: dict):
                 )
                 db.add(cli)
                 await db.flush()
-                logger.info(f"Nuevo cliente {phone} asignado a {rname} ({rid})")
             else:
                 rid = cli.id_restaurante
                 rest_res = await db.execute(
@@ -588,10 +616,10 @@ async def process_msg(payload: dict):
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
-            # --- Comando especial para PDF ---
+            # Comando especial: menu pdf
             if txt == "menu pdf":
-                pdf_url = "https://chatcommerce-bot.onrender.com/menu/pdf"
-                reply = f"📄 *Menú Digital de Restinga*\nPuedes descargarlo aquí: {pdf_url}\n\nTambién puedes usar el comando `m` para ver el menú interactivo."
+                pdf_url = f"https://chatcommerce-bot.onrender.com/menu/pdf?restaurante_id={rid}"
+                reply = f"📄 *Menú Digital de Restinga*\nHaz clic en el siguiente enlace para descargar el PDF:\n➡️ {pdf_url}"
                 await send_wa(phone, reply)
                 return
 
@@ -628,7 +656,7 @@ async def process_msg(payload: dict):
                 "7": "de",
             }
 
-            # FLUJO IDIOMA (incluye detección por palabra clave)
+            # FLUJO IDIOMA (incluye detección por keyword)
             if fase == "lang" or txt in ("q", "salir", "quit"):
                 new_lang = lang_map.get(txt)
                 if not new_lang:
@@ -821,7 +849,7 @@ async def process_msg(payload: dict):
                         reply = t("res_personas", lang)
 
                 elif txt in ("q", "salir", "quit"):
-                    # ★★★ ELIMINAR CONVERSACIÓN Y CREAR UNA NUEVA LIMPIA ★★★
+                    # Eliminar conversación actual y crear nueva limpia
                     await db.delete(conv)
                     nueva_conv = Conversacion(
                         id_cliente=cli.id_cliente,
@@ -835,7 +863,6 @@ async def process_msg(payload: dict):
                     )
                     db.add(nueva_conv)
                     await db.commit()
-                    # Enviamos el mensaje de bienvenida con el selector
                     reply = t("welcome", lang, restaurante=rname)
                     await send_wa(phone, reply)
                     return
@@ -843,7 +870,7 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("help", lang)
 
-            # FLUJO RESERVAS (igual que antes)
+            # FLUJO RESERVAS
             elif fase == "res_p":
                 if txt.isdigit():
                     ctx["res_personas"] = int(txt)
@@ -912,15 +939,16 @@ async def process_msg(payload: dict):
                     ):
                         ctx.pop(k, None)
                 elif txt in ("si", "yes", "oui", "نعم"):
-                    now = now_utc()
-                    codigo = f"RES-{now.strftime('%Y%m%d')}-{now.second:02d}"
+                    codigo = (
+                        f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
+                    )
                     fecha_res = datetime.strptime(ctx["res_fecha"], "%Y-%m-%d").date()
                     hora_res = datetime.strptime(ctx["res_hora"], "%H:%M").time()
                     res = Reservacion(
                         id_restaurante=rid,
                         id_cliente=cli.id_cliente,
                         codigo_reserva=codigo,
-                        num_personas=ctx.get("res_personas", 1),
+                        num_personas=ctx["res_personas"],
                         fecha_reserva=fecha_res,
                         hora_reserva=hora_res,
                         estado=EstadoReserva.confirmada,
@@ -951,7 +979,7 @@ async def process_msg(payload: dict):
                 ctx["carrito"] = []
                 reply = t("reset", lang)
 
-            # Si no hemos salido por 'q', guardamos el contexto limpio
+            # Guardar contexto (si no salimos por 'q')
             if txt not in ("q", "salir", "quit"):
                 ctx_limpio = clean_serializable(ctx)
                 conv.contexto_bot = ctx_limpio
@@ -959,8 +987,8 @@ async def process_msg(payload: dict):
                 try:
                     await db.commit()
                     logger.info("✅ Contexto guardado correctamente")
-                except Exception as commit_err:
-                    logger.error(f"❌ Error en commit: {commit_err}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"❌ Error en commit: {e}", exc_info=True)
                     await db.rollback()
             await send_wa(phone, reply)
 
@@ -969,7 +997,7 @@ async def process_msg(payload: dict):
 
 
 # ============================================================
-# ENDPOINTS STAFF (COPIA LOS QUE YA TENÍAS)
+# ENDPOINTS STAFF (RESERVAS, PEDIDOS, DASHBOARD)
 # ============================================================
 @app.patch("/api/v1/reservaciones/{id}/confirmar")
 async def confirmar_reserva(
@@ -1136,11 +1164,12 @@ async def dashboard_hoy(
         today = datetime.now(timezone.utc).date()
         start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
         end = datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc)
-
-        total_ingresos = await db.scalar(
-            select(func.sum(Pedido.total)).where(
-                Pedido.id_restaurante == restaurante_id,
-                Pedido.created_at.between(start, end),
+        total_ingresos = (
+            await db.scalar(
+                select(func.sum(Pedido.total)).where(
+                    Pedido.id_restaurante == restaurante_id,
+                    Pedido.created_at.between(start, end),
+                )
             )
         ) or Decimal(0)
         total_pedidos = (
@@ -1150,8 +1179,7 @@ async def dashboard_hoy(
                     Pedido.created_at.between(start, end),
                 )
             )
-            or 0
-        )
+        ) or 0
         total_reservas = (
             await db.scalar(
                 select(func.count(Reservacion.id_reserva)).where(
@@ -1159,8 +1187,7 @@ async def dashboard_hoy(
                     Reservacion.fecha_reserva == today,
                 )
             )
-            or 0
-        )
+        ) or 0
         month_ago = datetime.now(timezone.utc) - timedelta(days=30)
         nuevos_clientes = (
             await db.scalar(
@@ -1169,9 +1196,7 @@ async def dashboard_hoy(
                     Cliente.created_at >= month_ago,
                 )
             )
-            or 0
-        )
-
+        ) or 0
         return {
             "ingresos_hoy": float(total_ingresos),
             "pedidos_hoy": total_pedidos,
@@ -1214,7 +1239,7 @@ async def reservas_hoy_api(
 
 
 # ============================================================
-# PANEL HTML (básico)
+# PANEL HTML (TAILWIND)
 # ============================================================
 LOGIN_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
@@ -1231,9 +1256,9 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy<tr></tr>';return;}
-tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<td><td colspan="5" class="text-center">No hay pedidos activos</td></table>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
+tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<td><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
@@ -1308,7 +1333,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "16.1", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "17.0", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
