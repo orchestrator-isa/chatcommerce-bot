@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v17.6 - PERSISTENCIA ROBUSTA
-- Upsert de clientes y conversaciones (evita duplicados)
-- Restricción UNIQUE(wa_id) en clientes (debes añadirla en BD)
-- q actualiza la conversación, no elimina/crea
-- Detección de idioma por palabra clave, cantidades, etc.
+ORQUESTRATOR ISA v17.7 - PERSISTENCIA ROBUSTA + q atómico
+- q actualiza la conversación existente (no elimina/crea)
+- ORDER BY last_message_at DESC + refresh forzado
+- Panel: endpoints aceptan cookie de sesión además de API Key
+- Detección de idioma por palabra clave, cantidades, PDF, etc.
 """
 
 import os
@@ -155,13 +155,12 @@ class Cliente(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
-    wa_id: Mapped[str] = mapped_column(String, unique=True)  # ← ahora sí
+    wa_id: Mapped[str] = mapped_column(String, unique=True)
     telefono: Mapped[str] = mapped_column(String)
     language_pref: Mapped[str] = mapped_column(String, default="es")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
-    # Los demás campos (total_pedidos, etc.) se dejan con valores por defecto en la BD
 
 
 class Conversacion(Base):
@@ -171,7 +170,7 @@ class Conversacion(Base):
     )
     id_cliente: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), unique=True
-    )  # ← uno por cliente
+    )  # uno por cliente
     id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
     contexto_bot: Mapped[dict] = mapped_column(JSONB, default=dict)
     last_message_at: Mapped[datetime] = mapped_column(
@@ -285,7 +284,7 @@ class MenuPDF(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v17.6")
+app = FastAPI(title="Orquestrator ISA v17.7")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
@@ -388,7 +387,7 @@ def clean_serializable(obj):
 
 
 # ============================================================
-# DETECCIÓN DE IDIOMA
+# DETECCIÓN DE IDIOMA POR PALABRA CLAVE
 # ============================================================
 IDIOMA_KEYWORDS = {
     "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido", "español"],
@@ -411,7 +410,7 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
 
 
 # ============================================================
-# TRADUCCIONES (mensajes)
+# TRADUCCIONES (mensajes del sistema)
 # ============================================================
 I18N = {
     "es": {
@@ -547,7 +546,7 @@ async def get_menu_pdf(restaurante_id: uuid.UUID):
 
 
 # ============================================================
-# BOT: PROCESAMIENTO DE MENSAJES (con upsert y manejo de duplicados)
+# BOT: PROCESAMIENTO DE MENSAJES
 # ============================================================
 async def process_msg(payload: dict):
     if not async_session_maker:
@@ -564,13 +563,11 @@ async def process_msg(payload: dict):
         txt = txt_raw.lower()
 
         async with async_session_maker() as db:
-            # 1. Obtener o crear cliente (upsert por wa_id)
-            # Buscar cliente existente (con la restricción UNIQUE, solo debería haber uno)
+            # Obtener o crear cliente (por wa_id)
             stmt_cli = select(Cliente).where(Cliente.wa_id == phone)
             result_cli = await db.execute(stmt_cli)
             cli = result_cli.scalar_one_or_none()
             if not cli:
-                # Obtener restaurante Restinga
                 rest_stmt = (
                     select(Restaurante)
                     .where(Restaurante.nombre == "Restinga", Restaurante.activo)
@@ -592,7 +589,6 @@ async def process_msg(payload: dict):
                 logger.info(f"Nuevo cliente creado: {phone}")
             else:
                 rid = cli.id_restaurante
-                # Obtener nombre del restaurante
                 rest_stmt = select(Restaurante.nombre).where(
                     Restaurante.id_restaurante == rid
                 )
@@ -601,7 +597,7 @@ async def process_msg(payload: dict):
 
             lang = cli.language_pref
 
-            # 2. Obtener o crear conversación (una por cliente)
+            # Obtener o crear conversación (una por cliente)
             stmt_conv = select(Conversacion).where(
                 Conversacion.id_cliente == cli.id_cliente
             )
@@ -997,25 +993,30 @@ async def process_msg(payload: dict):
                         await send_wa(phone, reply)
                         return
 
-                # REINICIAR (q) – actualiza la conversación existente
+                # REINICIAR (q) – VERSIÓN ATÓMICA (UPDATE)
                 elif txt in ("q", "salir", "quit"):
-                    # En lugar de eliminar, actualizamos el contexto
                     nuevo_contexto = {
                         "fase": "lang",
                         "carrito": [],
                         "menu_page": 1,
                         "current_menu_page_dishes": [],
                     }
-                    conv.contexto_bot = nuevo_contexto
+                    conv.contexto_bot = clean_serializable(nuevo_contexto)
                     conv.last_message_at = now_utc()
                     try:
                         await db.commit()
-                        await db.refresh(conv)
-                        logger.info("✅ Conversación reiniciada (update)")
+                        logger.info(
+                            f"✅ q ejecutado: fase reseteada a 'lang' para {cli.wa_id}"
+                        )
                     except Exception as e:
-                        logger.error(f"❌ Error commit en q: {e}", exc_info=True)
+                        logger.error(f"❌ Error al resetear con q: {e}", exc_info=True)
                         await db.rollback()
-                    # Enviar bienvenida
+                        reply = "⚠️ Error al reiniciar. Intenta de nuevo."
+                        await send_wa(phone, reply)
+                        return
+
+                    # Recargar idioma base del cliente y enviar selector
+                    lang = cli.language_pref
                     reply = t("welcome", lang, restaurante=rname)
                     await send_wa(phone, reply)
                     return
@@ -1132,7 +1133,7 @@ async def process_msg(payload: dict):
                 ctx["carrito"] = []
                 reply = t("reset", lang)
 
-            # Guardar contexto si no se ha hecho antes
+            # Guardar contexto si no se ha hecho antes (solo para comandos que no se guardaron ya)
             if reply and not (
                 txt in ("q", "salir", "quit")
                 or txt in ("m", "n", "a")
@@ -1416,15 +1417,15 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<td><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
-tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='</table><td colspan="5" class="text-center">No hay pedidos activos<html><body>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td><tr>';return;}
+tbody.innerHTML=data.map(r=>`<td><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos<html><body>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
 <body class="bg-gray-100"><div class="container mx-auto p-4"><h1 class="text-3xl font-bold mb-6">📋 Recepción</h1>
 <div class="bg-white p-4 rounded shadow mb-8"><h2 class="text-xl font-semibold mb-2">📅 Reservas de hoy</h2><table class="w-full border"><thead><tr><th>Código</th><th>Cliente</th><th>Personas</th><th>Hora</th><th>Mesa</th><th>Zona</th><th>Estado</th></tr></thead><tbody id="reservas-body"></tbody></table></div>
-<div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-semibold mb-2">🛒 Pedidos activos</h2><table class="w-full border"><thead><tr><th>ID</th><th>Total</th><th>Estado</th><th>Hora</th><th>Acción</th></tr></thead><tbody id="pedidos-body"></tbody></table></div></div></body></html>
+<div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-semibold mb-2">🛒 Pedidos activos</h2><table class="w-full border"><thead><tr><th>ID</th><th>Total</th><th>Estado</th><th>Hora</th><th>Acción</th></tr></thead><tbody id="pedidos-body"></tbody><td></div></div></body></html>
 """)
 
 METRICAS_HTML = textwrap.dedent("""\
@@ -1493,7 +1494,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "17.6", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "17.7", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
