@@ -19,6 +19,7 @@ import uuid
 import httpx
 import logging
 import textwrap
+import asyncio
 from datetime import datetime, timezone, timedelta, date, time
 from enum import Enum
 from decimal import Decimal
@@ -35,6 +36,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import (
     Enum as SAEnum,
@@ -289,6 +291,42 @@ class MenuPDF(Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Campana(Base):
+    __tablename__ = "campanas"
+    id_campana: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    nombre: Mapped[str] = mapped_column(String)
+    mensaje: Mapped[str] = mapped_column(String)
+    filtro: Mapped[dict] = mapped_column(JSONB, default=dict)
+    total_destinatarios: Mapped[int] = mapped_column(Integer, default=0)
+    enviados: Mapped[int] = mapped_column(Integer, default=0)
+    estado: Mapped[str] = mapped_column(String, default="borrador")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class CampanaDestinatario(Base):
+    __tablename__ = "campana_destinatarios"
+    id_campana: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True
+    )
+    id_cliente: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True
+    )
+    enviado: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class BroadcastRequest(BaseModel):
+    nombre: str
+    mensaje: str
+    filtro: str = Field(
+        "todos", pattern="^(todos|activos_30d|inactivos_60d|con_reservas)$"
+    )
+
+
 # ============================================================
 # APP
 # ============================================================
@@ -436,6 +474,88 @@ async def calc_tiempo(
     activos = res.scalar() or 0
     base = 10 if tipo == "recoger" else 25
     return f"{base + int(round(n_platos * 0.5)) + (activos * 2)} minutos"
+
+
+@app.post("/api/v1/broadcast")
+async def crear_campana(
+    req: BroadcastRequest,
+    bg: BackgroundTasks,
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    if len(req.mensaje) > 1600:
+        raise HTTPException(400, "Máximo 1600 caracteres")
+    async with async_session_maker() as db:
+        q = select(Cliente).where(Cliente.id_restaurante == restaurante_id)
+        if req.filtro == "activos_30d":
+            q = q.where(Cliente.created_at >= now_utc() - timedelta(days=30))
+        elif req.filtro == "inactivos_60d":
+            q = q.where(Cliente.last_visit_at < now_utc() - timedelta(days=60))
+        clientes = (await db.execute(q)).scalars().all()
+        if not clientes:
+            raise HTTPException(400, "No hay clientes para este filtro")
+
+        campana = Campana(
+            id_restaurante=restaurante_id,
+            nombre=req.nombre,
+            mensaje=req.mensaje,
+            filtro={"tipo": req.filtro},
+            total_destinatarios=len(clientes),
+            estado="enviando",
+        )
+        db.add(campana)
+        await db.flush()
+        for c in clientes:
+            db.add(
+                CampanaDestinatario(
+                    id_campana=campana.id_campana, id_cliente=c.id_cliente
+                )
+            )
+        await db.commit()
+
+        bg.add_task(_enviar_campana_bg, campana.id_campana, clientes, req.mensaje)
+        return {
+            "status": "202 Accepted",
+            "campana_id": str(campana.id_campana),
+            "total": len(clientes),
+        }
+
+
+async def _enviar_campana_bg(campana_id: uuid.UUID, clientes: list, mensaje: str):
+    try:
+        for c in clientes:
+            await send_wa(c.telefono, mensaje)
+            async with async_session_maker() as db:
+                await db.execute(
+                    update(Campana)
+                    .where(Campana.id_campana == campana_id)
+                    .values(enviados=Campana.enviados + 1)
+                )
+                await db.execute(
+                    update(CampanaDestinatario)
+                    .where(
+                        CampanaDestinatario.id_campana == campana_id,
+                        CampanaDestinatario.id_cliente == c.id_cliente,
+                    )
+                    .values(enviado=True)
+                )
+                await db.commit()
+            await asyncio.sleep(0.1)  # R012: 10 msg/s
+        async with async_session_maker() as db:
+            await db.execute(
+                update(Campana)
+                .where(Campana.id_campana == campana_id)
+                .values(estado="completada")
+            )
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Error campaña {campana_id}: {e}")
+        async with async_session_maker() as db:
+            await db.execute(
+                update(Campana)
+                .where(Campana.id_campana == campana_id)
+                .values(estado="cancelada")
+            )
+            await db.commit()
 
 
 # ============================================================
@@ -1445,17 +1565,34 @@ LOGIN_HTML = textwrap.dedent("""\
 
 RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
-async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
-tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
-tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
-async function cambiarEstado(id){alert('Función en construcción');}
-setInterval(fetchData,30000);fetchData();</script></head>
-<body class="bg-gray-100"><div class="container mx-auto p-4"><h1 class="text-3xl font-bold mb-6">📋 Recepción</h1>
-<div class="bg-white p-4 rounded shadow mb-8"><h2 class="text-xl font-semibold mb-2">📅 Reservas de hoy</h2><table class="w-full border"><thead><tr><th>Código</th><th>Cliente</th><th>Personas</th><th>Hora</th><th>Mesa</th><th>Zona</th><th>Estado</th></tr></thead><tbody id="reservas-body"></tbody></table></div>
-<div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-semibold mb-2">🛒 Pedidos activos</h2><table class="w-full border"><thead><tr><th>ID</th><th>Total</th><th>Estado</th><th>Hora</th><th>Acción</th></tr></thead><tbody id="pedidos-body"></tbody></table></div></div></body></html>""")
+<script src="https://cdn.tailwindcss.com"></script><title>Panel Restinga v18</title>
+<style>.tab-btn.active{background:#C9A84C;color:#0F0F0F;border-color:#C9A84C}.tab-content{display:none}.tab-content.active{display:block}</style>
+<script>
+async function loadTab(tab){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.getElementById(tab).classList.add('active');document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelector(`[data-tab="${tab}"]`).classList.add('active');if(tab==='reservas')fetchReservas();if(tab==='pedidos')fetchPedidos();if(tab=='campanas')fetchCampanas();}
+async function fetchReservas(){const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const tb=document.getElementById('reservas-tb');tb.innerHTML=r.length?r.map(x=>`<tr><td class='p-2 border'>${x.codigo_reserva}</td><td class='p-2 border'>${x.num_personas}</td><td class='p-2 border'>${x.hora_reserva}</td><td class='p-2 border'>${x.mesa_asignada||'-'}</td><td class='p-2 border'><span class='px-2 py-1 rounded ${x.estado=='pendiente'?'bg-yellow-200':'bg-green-200'}'>${x.estado}</span></td><td class='p-2 border'><button onclick="patchRes('${x.id}','confirmar')" class='bg-blue-500 text-white px-2 py-1 rounded text-sm'>✓</button><button onclick="patchRes('${x.id}','cancelar')" class='bg-red-500 text-white px-2 py-1 rounded text-sm'>✕</button></td></tr>`).join(''):'<tr><td colspan="6" class="p-4 text-center text-gray-500">Sin reservas hoy</td></tr>';}
+async function patchRes(id,acc){await fetch(`/api/v1/reservaciones/${id}/${acc}`,{method:'PATCH'});fetchReservas();}
+async function fetchPedidos(){const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());const tb=document.getElementById('pedidos-tb');tb.innerHTML=p.length?p.map(x=>`<tr><td class='p-2 border'>${x.id.slice(0,8)}</td><td class='p-2 border'>${x.total} MAD</td><td class='p-2 border'>${x.delivery_type||'-'}</td><td class='p-2 border'><span class='px-2 py-1 rounded bg-blue-100'>${x.estado}</span></td></tr>`).join(''):'<tr><td colspan="4" class="p-4 text-center text-gray-500">Sin pedidos activos</td></tr>';}
+async function fetchCampanas(){const c=await fetch('/api/v1/campanas/recientes').then(r=>r.json()||[]);const tb=document.getElementById('campanas-tb');tb.innerHTML=c.length?c.map(x=>`<tr><td class='p-2 border'>${x.nombre}</td><td class='p-2 border'>${x.total_destinatarios}</td><td class='p-2 border'>${x.enviados}</td><td class='p-2 border'><span class='px-2 py-1 rounded ${x.estado=='completada'?'bg-green-200':'bg-yellow-200'}'>${x.estado}</span></td></tr>`).join(''):'<tr><td colspan="4" class="p-4 text-center text-gray-500">Sin campañas recientes</td></tr>';}
+async function sendBroadcast(){const n=document.getElementById('b-nombre').value,m=document.getElementById('b-mensaje').value,f=document.getElementById('b-filtro').value;try{const r=await fetch('/api/v1/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nombre:n,mensaje:m,filtro:f})});alert(r.ok?'✅ Enviando...':r.statusText);}catch(e){alert('Error');}}
+setInterval(()=>{if(document.getElementById('reservas').classList.contains('active'))fetchReservas();if(document.getElementById('pedidos').classList.contains('active'))fetchPedidos();},15000);
+</script></head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-6xl mx-auto bg-gray-800 rounded shadow-lg overflow-hidden">
+<div class="flex border-b border-gray-700">
+<button data-tab="reservas" class="tab-btn active px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">📅 Reservas</button>
+<button data-tab="pedidos" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">🛒 Pedidos</button>
+<button data-tab="chats" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">💬 Chats</button>
+<button data-tab="menu" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">🍽️ Menú</button>
+<button data-tab="campanas" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">📢 Campañas</button>
+<button data-tab="config" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent hover:text-yellow-400">⚙️ Config</button>
+</div>
+<div id="reservas" class="tab-content active p-4"><h2 class="text-xl font-bold mb-3">Reservas de hoy</h2><table class="w-full border-collapse"><thead class="bg-gray-700"><tr><th class="p-2">Código</th><th class="p-2">Personas</th><th class="p-2">Hora</th><th class="p-2">Mesa</th><th class="p-2">Estado</th><th class="p-2">Acciones</th></tr></thead><tbody id="reservas-tb"><tr><td colspan="6" class="p-4 text-center">Cargando...</td></tr></tbody></table></div>
+<div id="pedidos" class="tab-content p-4"><h2 class="text-xl font-bold mb-3">Pedidos Activos</h2><table class="w-full border-collapse"><thead class="bg-gray-700"><tr><th class="p-2">ID</th><th class="p-2">Total</th><th class="p-2">Tipo</th><th class="p-2">Estado</th></tr></thead><tbody id="pedidos-tb"><tr><td colspan="4" class="p-4 text-center">Cargando...</td></tr></tbody></table></div>
+<div id="chats" class="tab-content p-4"><h2 class="text-xl font-bold mb-3">Conversaciones</h2><p class="text-gray-400">Módulo en desarrollo. Conectado a /api/v1/conversaciones.</p></div>
+<div id="menu" class="tab-content p-4"><h2 class="text-xl font-bold mb-3">Gestión de Menú</h2><p class="text-gray-400">Sincronizado con tabla platos. Toggle disponibilidad próximamente.</p></div>
+<div id="campanas" class="tab-content p-4"><h2 class="text-xl font-bold mb-3">Enviar Campaña</h2><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><input id="b-nombre" placeholder="Nombre campaña" class="p-2 bg-gray-700 border border-gray-600 rounded"><select id="b-filtro" class="p-2 bg-gray-700 border border-gray-600 rounded"><option value="todos">Todos</option><option value="activos_30d">Activos 30d</option><option value="inactivos_60d">Inactivos 60d</option></select></div><textarea id="b-mensaje" rows="3" placeholder="Mensaje (max 1600)" class="w-full p-2 bg-gray-700 border border-gray-600 rounded mb-3"></textarea><button onclick="sendBroadcast()" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded">🚀 ENVIAR AHORA</button><h3 class="mt-6 font-bold">Historial</h3><table class="w-full mt-2"><tbody id="campanas-tb"><tr><td colspan="4" class="p-4 text-center">Sin campañas</td></tr></tbody></table></div>
+<div id="config" class="tab-content p-4"><h2 class="text-xl font-bold mb-3">Configuración</h2><p class="text-gray-400">Horarios, respuestas automáticas y AI Agent (pendiente fase 18.1).</p></div>
+</div></body></html>""")
 
 METRICAS_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
