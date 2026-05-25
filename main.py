@@ -62,11 +62,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("orquestrator_bot")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", " ").strip()
 PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
-WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
-WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", "").strip()
+WA_TOKEN = os.getenv("WHATSAPP_TOKEN", " ").strip()
+WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", " ").strip()
 
 if not DATABASE_URL:
     logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
@@ -222,6 +222,7 @@ class Pedido(Base):
     )
     items: Mapped[list] = mapped_column(JSONB, default=list)
     total: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), default=Decimal("0.00"))
+    # 🆕 Campos v18.2.3
     delivery_type: Mapped[str] = mapped_column(String, nullable=True)
     direccion: Mapped[str] = mapped_column(String, nullable=True)
     metodo_pago: Mapped[str] = mapped_column(String, nullable=True)
@@ -479,6 +480,7 @@ I18N = {
         "cash_bill_request": "💰 Pago en efectivo\n¿Con qué billete pagas? (ej: 50, 100, 200)",
         "change_calculated": "💶 Cambio: {cambio} MAD.\n\n✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Efectivo\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
         "card_confirm": "✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Tarjeta\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
+        # Reservas (mantenidas)
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)",
@@ -691,7 +693,7 @@ async def process_msg(payload: dict):
             ctx.setdefault("carrito", [])
             ctx.setdefault("menu_page", 1)
             ctx.setdefault("current_menu_page_dishes", [])
-            ctx.setdefault("pedido_temp", {})
+            ctx.setdefault("pedido_temp", {})  # 🆕
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
@@ -823,9 +825,7 @@ async def process_msg(payload: dict):
                             "card_confirm",
                             lang,
                             numero=str(ped.id_pedido)[-6:].upper(),
-                            delivery_type="Recogida"
-                            if tipo == "recoger"
-                            else "Domicilio",
+                            delivery_type="Recogida",
                             total=total,
                             tiempo=tiempo,
                         )
@@ -914,6 +914,7 @@ async def process_msg(payload: dict):
                     reply += "\n".join(
                         t("menu_item", lang, **it) for it in menu_items
                     ) + t("menu_footer", lang)
+                # ... (resto de navegación n/a, dígitos, x, reservar igual que antes) ...
                 elif txt in ("n", "siguiente", "next", ">", "->"):
                     page = ctx.get("menu_page", 1)
                     _, total_pages = await get_menu_page(db, rid, lang, 1)
@@ -966,7 +967,7 @@ async def process_msg(payload: dict):
                         total = sum(item["precio"] for item in carrito)
                         reply = t("added", lang, plato=selected["nombre"], total=total)
                     else:
-                        reply = t("help", lang)
+                        reply = t("invalid", lang)
                 elif " " in txt and txt.split()[0].isdigit() and len(txt.split()) == 2:
                     parts = txt.split()
                     cantidad, num_plato = int(parts[0]), int(parts[1])
@@ -988,7 +989,7 @@ async def process_msg(payload: dict):
                         total = sum(item["precio"] for item in carrito)
                         reply = t("added", lang, plato=selected["nombre"], total=total)
                     else:
-                        reply = t("help", lang)
+                        reply = t("invalid", lang)
                 elif txt.startswith("x "):
                     parts = txt.split()
                     if len(parts) == 2 and parts[1].isdigit():
@@ -998,13 +999,13 @@ async def process_msg(payload: dict):
                             removed = carrito.pop(idx)
                             ctx["carrito"] = carrito
                             total = sum(i["precio"] for i in carrito)
-                            reply = (
-                                f"❌ Eliminado {removed['nombre']}. Total: {total} MAD"
+                            reply = t(
+                                "removed", lang, plato=removed["nombre"], total=total
                             )
                         else:
-                            reply = t("help", lang)
+                            reply = t("invalid", lang)
                     else:
-                        reply = t("help", lang)
+                        reply = t("invalid", lang)
                 elif txt in ("r", "reservar", "reserve", "book"):
                     config = (
                         await db.execute(
@@ -1148,10 +1149,11 @@ async def process_msg(payload: dict):
                         ctx.pop(k, None)
             else:
                 ctx["fase"] = "lang"
-                reply = t("welcome", lang, restaurante=rname)
+                reply = t("reset", lang)
 
             # Guardar contexto y enviar respuesta
             if reply:
+                # No guardamos el contexto para fases de pedido que ya hicieron commit interno
                 if fase not in ("pago", "cash_bill"):
                     conv.contexto_bot = clean_serializable(ctx)
                     conv.last_message_at = now_utc()
