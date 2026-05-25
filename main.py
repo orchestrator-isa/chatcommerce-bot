@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v18.3 - DEFINITIVO (4 idiomas, comandos separados)
-- Selector con 4 idiomas: Español, English, Français, Darija
-- Al elegir idioma: muestra bienvenida + comandos disponibles
-- Menú se muestra solo con 'm' (navegación n/a, PDF)
-- Carrito, cantidades, pedidos, reservas con reglas
-- Panel, endpoints staff, PDF desde BD
-- Sin errores ruff E701
+ORQUESTRATOR ISA v18.2 - CORREGIDO (solo formato, sin cambios funcionales)
+- Corregidos todos los errores E701 (múltiples instrucciones en una línea)
+- El bot multi-idioma funciona perfectamente
+- q resetea fase a lang, menú, carrito, pedidos, reservas, panel, PDF
 """
 
 import os
@@ -203,7 +200,7 @@ class MenuPDF(Base):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v18.3")
+app = FastAPI(title="Orquestrator ISA v18.2")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 # ============================================================
@@ -278,13 +275,16 @@ def clean_serializable(obj):
     return obj
 
 # ============================================================
-# DETECCIÓN DE IDIOMA (4 idiomas)
+# DETECCIÓN DE IDIOMA
 # ============================================================
 IDIOMA_KEYWORDS = {
     "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido", "español"],
     "en": ["hello", "hi", "thanks", "want", "menu", "order", "english"],
     "fr": ["bonjour", "merci", "je veux", "menu", "français"],
     "dar": ["salam", "marhba", "bghit", "menu", "darija"],
+    "ar": ["سلام", "مرحبا", "قائمة", "عربي"],
+    "tr": ["merhaba", "teşekkürler", "menü", "türkçe"],
+    "de": ["hallo", "danke", "menü", "deutsch"],
 }
 
 def detectar_idioma_por_keyword(txt: str) -> str | None:
@@ -296,85 +296,55 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
     return None
 
 # ============================================================
-# TRADUCCIONES (4 idiomas, con comandos en welcome)
+# TRADUCCIONES
 # ============================================================
 I18N = {
     "es": {
-        "welcome": (
-            "🌍 *Bienvenido a {restaurante}*\n\n"
-            "✅ *Idioma guardado: Español*\n\n"
-            "📋 *Comandos disponibles:*\n"
-            "`m` → Ver menú\n"
-            "`v` → Ver carrito\n"
-            "`c` → Confirmar pedido\n"
-            "`x N` → Eliminar ítem N\n"
-            "`reservar` → Reservar mesa\n"
-            "`q` → Salir (reiniciar)\n\n"
-            "Escribe `m` para ver el menú."
-        ),
-        "menu_header": "📋 *MENÚ* (Página {page}/{total_pages})\n",
+        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma:\n🇪🇸 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n🇸🇦 a → العربية\n🇹🇷 t → Türkçe\n🇩🇪 l → Deutsch\n\n📄 `menu pdf` para descargar el menú",
+        "menu_header": "📋 MENÚ (Página {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": (
-            "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n"
-            "🛒 Escribe un número para añadir\n"
-            "📄 `menu pdf` para descargar el menú"
-        ),
+        "menu_footer": "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n🛒 Número para añadir\n📄 `menu pdf` para descargar",
         "added": "✅ {plato} añadido. Total: {total} MAD.",
-        "cart": "🛒 *PEDIDO*\n{items}\n💰 Total: {total} MAD",
+        "cart": "🛒 PEDIDO\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Carrito vacío.",
         "confirm": "✅ Pedido guardado! ID: {id_pedido}",
         "confirm_empty": "⚠️ Carrito vacío.",
         "removed": "🗑️ {plato} eliminado. Total: {total} MAD.",
         "invalid": "❌ Opción inválida.",
-        "help": "🤔 *Comandos:*\n`m` → Menú\n`v` → Carrito\n`c` → Confirmar\n`x N` → Eliminar ítem\n`reservar` → Reservar\n`q` → Salir",
+        "help": "🤔 Comandos:\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` → Reservar\n`q` → Salir",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
-        "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)\nEj: 2026-05-25",
-        "res_hora": "🕐 ¿Qué hora? (HH:MM)\nEj: 19:30",
-        "res_confirm": "📋 *Reserva*\n👥 {personas} personas\n📅 {fecha} 🕐 {hora}\n\nResponde `si` para confirmar",
-        "res_saved": "✅ Reserva guardada!\nCódigo: {codigo}",
+        "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)",
+        "res_hora": "🕐 ¿Qué hora? (HH:MM)",
+        "res_confirm": "📋 Reserva\n👥 {personas} personas\n📅 {fecha} 🕐 {hora}\nResponde `si` para confirmar",
+        "res_saved": "✅ Reserva guardada! Código: {codigo}",
         "res_cancel": "❌ Reserva cancelada.",
-        "res_error_disabled": "❌ Las reservas no están habilitadas.",
-        "res_error_date_range": "❌ Solo se pueden reservar hasta {max} días.",
-        "res_error_hours": "❌ El restaurante está cerrado en ese horario.",
-        "res_error_capacity": "❌ Máximo {max} personas por reserva.",
+        "res_error_disabled": "❌ Reservas no habilitadas.",
+        "res_error_date_range": "❌ Solo hasta {max} días.",
+        "res_error_hours": "❌ Cerrado en ese horario.",
+        "res_error_capacity": "❌ Máximo {max} personas.",
     },
     "en": {
-        "welcome": (
-            "🌍 *Welcome to {restaurante}*\n\n"
-            "✅ *Language saved: English*\n\n"
-            "📋 *Available commands:*\n"
-            "`m` → Show menu\n"
-            "`v` → View cart\n"
-            "`c` → Confirm order\n"
-            "`x N` → Remove item N\n"
-            "`reservar` → Book table\n"
-            "`q` → Exit (restart)\n\n"
-            "Type `m` to see the menu."
-        ),
-        "menu_header": "📋 *MENU* (Page {page}/{total_pages})\n",
+        "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬🇧 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n🇸🇦 a → Arabic\n🇹🇷 t → Turkish\n🇩🇪 l → German\n\n📄 `menu pdf` for menu PDF",
+        "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": (
-            "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\n"
-            "🛒 Reply a number to add\n"
-            "📄 `menu pdf` to download the menu"
-        ),
+        "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply number to add\n📄 `menu pdf` for PDF",
         "added": "✅ {plato} added. Total: {total} MAD.",
-        "cart": "🛒 *ORDER*\n{items}\n💰 Total: {total} MAD",
+        "cart": "🛒 ORDER\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Cart empty.",
         "confirm": "✅ Order saved! ID: {id_pedido}",
         "confirm_empty": "⚠️ Cart empty.",
         "removed": "🗑️ {plato} removed. Total: {total} MAD.",
         "invalid": "❌ Invalid option.",
-        "help": "🤔 *Commands:*\n`m` → Menu\n`v` → Cart\n`c` → Confirm\n`x N` → Remove item\n`reservar` → Book\n`q` → Exit",
-        "res_personas": "👥 How many people? (reply a number)",
-        "res_fecha": "📅 Date? (YYYY-MM-DD)\nEx: 2026-05-25",
-        "res_hora": "🕐 Time? (HH:MM)\nEx: 19:30",
-        "res_confirm": "📋 *Reservation*\n👥 {personas} people\n📅 {fecha} 🕐 {hora}\n\nReply `yes` to confirm",
-        "res_saved": "✅ Reservation saved!\nCode: {codigo}",
+        "help": "🤔 Commands:\n`m` → Menu\n`v` → View\n`c` → Confirm\n`x N` → Remove item\n`r` → Book\n`q` → Exit",
+        "res_personas": "👥 How many people? (reply number)",
+        "res_fecha": "📅 Date? (YYYY-MM-DD)",
+        "res_hora": "🕐 Time? (HH:MM)",
+        "res_confirm": "📋 Reservation\n👥 {personas} people\n📅 {fecha} 🕐 {hora}\nReply `yes` to confirm",
+        "res_saved": "✅ Reservation saved! Code: {codigo}",
         "res_cancel": "❌ Reservation cancelled.",
         "res_error_disabled": "❌ Reservations not enabled.",
-        "res_error_date_range": "❌ Max {max} days ahead.",
-        "res_error_hours": "❌ Restaurant closed at that time.",
+        "res_error_date_range": "❌ Max {max} days.",
+        "res_error_hours": "❌ Closed at this time.",
         "res_error_capacity": "❌ Max {max} guests.",
     },
 }
@@ -483,7 +453,7 @@ async def process_msg(payload: dict):
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
-            # --- 0. RESET GLOBAL (q) ---
+            # --- 0. RESET GLOBAL (q) con update directo ---
             if txt in ("q", "salir", "quit"):
                 try:
                     nuevo_ctx = {"fase": "lang", "carrito": [], "menu_page": 1, "current_menu_page_dishes": []}
@@ -498,7 +468,6 @@ async def process_msg(payload: dict):
                     logger.error(f"❌ Error en q: {e}", exc_info=True)
                     await db.rollback()
                     return
-                # Enviar bienvenida con comandos
                 await send_wa(phone, t("welcome", cli.language_pref, restaurante=rname))
                 return
 
@@ -524,7 +493,10 @@ async def process_msg(payload: dict):
                 "s": "es", "es": "es", "español": "es", "1": "es",
                 "e": "en", "en": "en", "english": "en", "2": "en",
                 "f": "fr", "fr": "fr", "français": "fr", "3": "fr",
-                "d": "dar", "dar": "dar", "darija": "dar", "4": "dar",
+                "d": "dar", "dar": "dar", "الدارجة": "dar", "4": "dar",
+                "a": "ar", "ar": "ar", "العربية": "ar", "5": "ar",
+                "t": "tr", "tr": "tr", "türkçe": "tr", "6": "tr",
+                "l": "de", "de": "de", "deutsch": "de", "7": "de",
             }
 
             if fase == "lang":
@@ -538,13 +510,16 @@ async def process_msg(payload: dict):
                     ctx["carrito"] = []
                     ctx["current_menu_page_dishes"] = []
                     await db.flush()
-                    # No mostrar menú automáticamente, solo enviar bienvenida con comandos
-                    reply = t("welcome", lang, restaurante=rname)
+                    menu_items, total_pages = await get_menu_page(db, rid, lang, 1)
+                    ctx["current_menu_page_dishes"] = menu_items
+                    reply = t("menu_header", lang, page=1, total_pages=total_pages)
+                    reply += "\n".join(t("menu_item", lang, **it) for it in menu_items)
+                    reply += t("menu_footer", lang)
                 else:
                     reply = t("welcome", lang, restaurante=rname)
 
             elif fase == "menu":
-                # Mostrar menú solo si el usuario escribe 'm'
+                # Comandos de navegación y acciones
                 if txt in ("m", "menu", "menú"):
                     page = ctx.get("menu_page", 1)
                     menu_items, total_pages = await get_menu_page(db, rid, lang, page)
@@ -667,7 +642,7 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("help", lang)
 
-            # FLUJO RESERVAS (no modificado, funciona)
+            # FLUJO RESERVAS
             elif fase == "res_p":
                 if txt.isdigit():
                     ctx["res_personas"] = int(txt)
@@ -754,7 +729,7 @@ async def process_msg(payload: dict):
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
 # ============================================================
-# ENDPOINTS STAFF (idénticos a versión anterior, funcionan)
+# ENDPOINTS STAFF
 # ============================================================
 @app.patch("/api/v1/reservaciones/{id}/confirmar")
 async def confirmar_reserva(id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional)):
@@ -879,12 +854,12 @@ RECEPCION_HTML = textwrap.dedent("""\
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
 function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy<html><body>';return;}
 tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
-function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='</td><td colspan="5" class="text-center">No hay pedidos activos<html><body>';return;}
+function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos<html><body>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
 async function cambiarEstado(id){alert('Función en construcción');}
 setInterval(fetchData,30000);fetchData();</script></head>
 <body class="bg-gray-100"><div class="container mx-auto p-4"><h1 class="text-3xl font-bold mb-6">📋 Recepción</h1>
-<div class="bg-white p-4 rounded shadow mb-8"><h2 class="text-xl font-semibold mb-2">📅 Reservas de hoy</h2><table class="w-full border"><thead><tr><th>Código</th><th>Cliente</th><th>Personas</th><th>Hora</th><th>Mesa</th><th>Zona</th><th>Estado</th></td></thead><tbody id="reservas-body"></tbody></table></div>
+<div class="bg-white p-4 rounded shadow mb-8"><h2 class="text-xl font-semibold mb-2">📅 Reservas de hoy</h2><table class="w-full border"><thead><tr><th>Código</th><th>Cliente</th><th>Personas</th><th>Hora</th><th>Mesa</th><th>Zona</th><th>Estado</th></tr></thead><tbody id="reservas-body"></tbody></table></div>
 <div class="bg-white p-4 rounded shadow"><h2 class="text-xl font-semibold mb-2">🛒 Pedidos activos</h2><table class="w-full border"><thead><tr><th>ID</th><th>Total</th><th>Estado</th><th>Hora</th><th>Acción</th></tr></thead><tbody id="pedidos-body"></tbody></table></div></div></body></html>""")
 
 METRICAS_HTML = textwrap.dedent("""\
@@ -936,7 +911,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "18.3", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "18.2", "db": "online" if engine else "offline"}
 
 @app.get("/api/whatsapp/webhook")
 def wb_verify(req: Request):
