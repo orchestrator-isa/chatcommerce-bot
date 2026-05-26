@@ -34,7 +34,7 @@ from sqlalchemy import (
     Integer, Time as SQLTime, Date, select, and_, func, LargeBinary, update
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-
+from difflib import SequenceMatcher
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -285,10 +285,28 @@ def clean_serializable(obj):
 # ============================================================
 # HELPERS V18.2.3
 # ============================================================
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
 ZONA_PERMITIDA = ["av. mohamed v", "calle sevilla", "plaza primo", "restinga", "tetouan", "tetuán"]
 
-def validar_zona(addr: str) -> bool:
-    return any(k in addr.lower() for k in ZONA_PERMITIDA)
+def validar_zona(addr: str, umbral: float = 0.7) -> bool:
+    addr_lower = addr.lower().strip()
+    # Limpieza básica: eliminar puntos y espacios extra
+    addr_clean = addr_lower.replace('.', '').replace(',', '')
+    for zona in ZONA_PERMITIDA:
+        zona_clean = zona.lower().replace('.', '')
+        # Si la dirección contiene la zona exactamente, aceptar rápido
+        if zona_clean in addr_clean:
+            return True
+        # Coincidencia difusa con la dirección completa o parte más relevante
+        # Tomamos las primeras 20-30 caracteres que suelen tener la calle
+        short_addr = addr_clean[:40]
+        ratio = similar(zona_clean, short_addr)
+        if ratio >= umbral:
+            return True
+    return False
+
 
 def format_cart(cart: List[Dict]) -> tuple:
     if not cart:
