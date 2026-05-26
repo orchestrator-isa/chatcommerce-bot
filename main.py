@@ -393,51 +393,10 @@ def clean_serializable(obj):
 # ============================================================
 # HELPERS V18.2.3
 # ============================================================
-ZONA_PERMITIDA = [
-    "av. mohamed v",
-    "calle sevilla",
-    "plaza primo",
-    "av. muhamed",
-    "av. muhammed",
-    "av. mohamed",
-    "av. mohammed",
-    "av. muhammad",
-    "av. mohammad",
-    "av. mohamed v",
-    "av. mohamed vi",
-    "av. mohamed 5",
-    "av. mohamed quinto",
-    "av. muhamed v",
-    "av. muhamed 5",
-    "av. muhammed v",
-    "av. mohammed v",
-    "av. muhammad v",
-    "calle mohamed",
-    "calle muhamed",
-    "calle muhammed",
-    "calle mohammed",
-    "calle muhammad",
-    "plaza mohamed",
-    "plaza muhamed",
-    "paseo mohamed",
-    "paseo muhamed",
-    "avda. mohamed",
-    "avda. muhamed",
-    "boulevard mohamed",
-    "av. mohamed-v",
-    "av. muhamed-v",
-    "calle mohamed v",
-    "calle muhamed v",
-    "av. mohamet",
-    "av. muhamet",
-    "av. mohamedd",
-    "av. muhammedd",
-    "calle sevilla",
-    "plaza primo",
-    "restinga",
-    "tetouan",
-    "tetuán",
-]
+ZONA_PERMITIDA = ["av. mohamed v", "calle sevilla", "plaza primo", "muhamed", "muhammed", "mohamed", "mohammed", "muhammad", "mohammad", "boulevard mohamed", "calle sevilla", "plaza primo", "restinga", "tetouan", "tetuán"]
+def similar(a, b):
+
+    return SequenceMatcher(None, a, b).ratio()
 
 def validar_zona(addr: str, umbral: float = 0.7) -> bool:
     addr_lower = addr.lower().strip()
