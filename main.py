@@ -52,8 +52,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from fuzzywuzzy import fuzz
-
+from difflib import SequenceMatcher
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -440,21 +439,22 @@ ZONA_PERMITIDA = [
     "tetuán",
 ]
 
-
-def validar_zona(addr: str, umbral: int = 80) -> bool:
+def validar_zona(addr: str, umbral: float = 0.7) -> bool:
     addr_lower = addr.lower().strip()
-    addr_clean = addr_lower.replace(".", "").replace(",", "")
+    # Limpieza básica: eliminar puntos y espacios extra
+    addr_clean = addr_lower.replace('.', '').replace(',', '')
     for zona in ZONA_PERMITIDA:
-        zona_clean = zona.lower().replace(".", "")
-        # Primero coincidencia exacta de subcadena (rápido)
+        zona_clean = zona.lower().replace('.', '')
+        # Si la dirección contiene la zona exactamente, aceptar rápido
         if zona_clean in addr_clean:
             return True
-        # Coincidencia difusa con la parte inicial (donde suele estar la calle)
-        score = fuzz.partial_ratio(zona_clean, addr_clean)
-        if score >= umbral:
+        # Coincidencia difusa con la dirección completa o parte más relevante
+        # Tomamos las primeras 20-30 caracteres que suelen tener la calle
+        short_addr = addr_clean[:40]
+        ratio = similar(zona_clean, short_addr)
+        if ratio >= umbral:
             return True
     return False
-
 
 def format_cart(cart: List[Dict]) -> tuple:
     if not cart:
