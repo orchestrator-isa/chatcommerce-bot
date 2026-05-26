@@ -7,10 +7,10 @@ ORQUESTRATOR ISA v18.2.3 - FLUJO DE PEDIDO COMPLETO + MEJORAS UX
 ✅ Detección de idioma precoz (global)
 ✅ Selector de 4 idiomas (es, en, fr, dar) + lang_selected
 ✅ Carrito agrupado (format_cart)
-✅ Flujo de pedido: entrega → dirección (con zona) → pago → efectivo/tarjeta
+✅ Flujo de pedido: entrega → dirección (con zona difusa) → pago → efectivo/tarjeta
 ✅ Tiempo estimado dinámico (platos + pedidos activos)
 ✅ Pago en efectivo: pregunta billete, calcula cambio
-✅ Zona de reparto limitada (palabras clave)
+✅ Zona de reparto con fuzzy matching (difflib)
 ✅ Menú paginado, reservas, panel, PDF
 """
 import os
@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta, date, time
 from enum import Enum
 from decimal import Decimal
 from typing import Optional, List, Dict
+from difflib import SequenceMatcher  # para fuzzy matching
 from fastapi import (
     FastAPI, HTTPException, BackgroundTasks, Request, Form, Depends, Header
 )
@@ -34,7 +35,7 @@ from sqlalchemy import (
     Integer, Time as SQLTime, Date, select, and_, func, LargeBinary, update
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
-from difflib import SequenceMatcher
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -285,28 +286,28 @@ def clean_serializable(obj):
 # ============================================================
 # HELPERS V18.2.3
 # ============================================================
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
 ZONA_PERMITIDA = ["av. mohamed v", "calle sevilla", "plaza primo", "restinga", "tetouan", "tetuán"]
 
+def similar(a, b):
+    """Coeficiente de similitud entre dos cadenas (0-1)."""
+    return SequenceMatcher(None, a, b).ratio()
+
 def validar_zona(addr: str, umbral: float = 0.7) -> bool:
+    """Valida si la dirección está en la zona de reparto usando fuzzy matching."""
     addr_lower = addr.lower().strip()
-    # Limpieza básica: eliminar puntos y espacios extra
-    addr_clean = addr_lower.replace('.', '').replace(',', '')
+    # Limpieza: eliminar puntos, comas, espacios extra
+    addr_clean = addr_lower.replace('.', '').replace(',', '').strip()
     for zona in ZONA_PERMITIDA:
         zona_clean = zona.lower().replace('.', '')
-        # Si la dirección contiene la zona exactamente, aceptar rápido
+        # Coincidencia exacta de subcadena (rápida)
         if zona_clean in addr_clean:
             return True
-        # Coincidencia difusa con la dirección completa o parte más relevante
-        # Tomamos las primeras 20-30 caracteres que suelen tener la calle
+        # Coincidencia difusa con la parte inicial (primeros 40 chars)
         short_addr = addr_clean[:40]
         ratio = similar(zona_clean, short_addr)
         if ratio >= umbral:
             return True
     return False
-
 
 def format_cart(cart: List[Dict]) -> tuple:
     if not cart:
@@ -349,7 +350,7 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
     return None
 
 # ============================================================
-# TRADUCCIONES
+# TRADUCCIONES (actualizadas)
 # ============================================================
 I18N = {
     "es": {
@@ -370,6 +371,9 @@ I18N = {
         "cash_bill_request": "💰 Pago en efectivo\n¿Con qué billete pagas? (ej: 50, 100, 200)",
         "change_calculated": "💶 Cambio: {cambio} MAD.\n\n✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Efectivo\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
         "card_confirm": "✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Tarjeta\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
+        "card_not_available_for_delivery": "❌ Tarjeta solo disponible en local. Elige `1` (Efectivo).",
+        "pickup": "Recogida",
+        "delivery": "Domicilio",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)",
@@ -399,6 +403,9 @@ I18N = {
         "cash_bill_request": "💰 Cash payment\nWhich bill? (e.g., 50, 100, 200)",
         "change_calculated": "💶 Change: {cambio} MAD.\n\n✅ Order #{numero}\n🚚 {delivery_type}\n💳 Cash\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
         "card_confirm": "✅ Order #{numero}\n🚚 {delivery_type}\n💳 Card\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
+        "card_not_available_for_delivery": "❌ Card only available for pick up. Choose `1` (Cash).",
+        "pickup": "Pick up",
+        "delivery": "Home delivery",
         "res_personas": "👥 How many people? (reply number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)",
         "res_hora": "🕐 Time? (HH:MM)",
@@ -604,7 +611,7 @@ async def process_msg(payload: dict):
                     reply = t("cash_bill_request", lang)
                 elif txt == "2":  # Tarjeta
                     if tipo == "domicilio":
-                        reply = "❌ Tarjeta solo disponible en local. Elige `1` (Efectivo)."
+                        reply = t("card_not_available_for_delivery", lang)
                     else:
                         ctx["pedido_temp"]["pago"] = "tarjeta"
                         total = sum(i["precio"] for i in items)
@@ -615,8 +622,9 @@ async def process_msg(payload: dict):
                                      direccion=ctx["pedido_temp"].get("dir"), metodo_pago="tarjeta")
                         db.add(ped)
                         await db.flush()
+                        delivery_label = t("pickup", lang) if tipo == "recoger" else t("delivery", lang)
                         reply = t("card_confirm", lang, numero=str(ped.id_pedido)[-6:].upper(),
-                                  delivery_type="Recogida" if tipo == "recoger" else "Domicilio", total=total, tiempo=tiempo)
+                                  delivery_type=delivery_label, total=total, tiempo=tiempo)
                         ctx["carrito"] = []
                         ctx.pop("pedido_temp", None)
                         ctx["fase"] = "menu"
@@ -650,10 +658,10 @@ async def process_msg(payload: dict):
                                          direccion=ctx["pedido_temp"].get("dir"), metodo_pago="efectivo")
                             db.add(ped)
                             await db.flush()
+                            delivery_label = t("pickup", lang) if tipo == "recoger" else t("delivery", lang)
                             reply = t("change_calculated", lang, cambio=cambio,
                                       numero=str(ped.id_pedido)[-6:].upper(),
-                                      delivery_type="Recogida" if tipo == "recoger" else "Domicilio",
-                                      total=total, tiempo=tiempo)
+                                      delivery_type=delivery_label, total=total, tiempo=tiempo)
                             ctx["carrito"] = []
                             ctx.pop("pedido_temp", None)
                             ctx["fase"] = "menu"
@@ -853,6 +861,7 @@ async def process_msg(payload: dict):
 
             # Guardar contexto y enviar respuesta
             if reply:
+                # Guardamos siempre el contexto (ya no excluimos fases)
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
                 try:
@@ -861,6 +870,7 @@ async def process_msg(payload: dict):
                     logger.error(f"❌ Error commit final: {e}", exc_info=True)
                     await db.rollback()
                 await send_wa(phone, reply)
+
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
@@ -988,7 +998,7 @@ RECEPCION_HTML = textwrap.dedent("""\
 <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script><title>Recepción - ISA</title><script>
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());renderReservas(r);renderPedidos(p);}catch(e){console.error(e);}}
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></table>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<td><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
 tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
 function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
 tbody.innerHTML=data.map(p=>`<tr><td class="border p-2">${p.id.slice(0,8)}</td><td class="border p-2">${p.total} MAD</td><td class="border p-2">${p.estado}</td><td class="border p-2">${new Date(p.created_at).toLocaleTimeString()}</td><td class="border p-2"><button class="bg-blue-500 text-white px-2 py-1 rounded" onclick="cambiarEstado('${p.id}')">Cambiar</button></td></tr>`).join('');}
