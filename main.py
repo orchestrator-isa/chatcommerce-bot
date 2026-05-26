@@ -835,16 +835,14 @@ async def process_msg(payload: dict):
 
             # Guardar contexto y enviar respuesta
             if reply:
-                if fase not in ("pago", "cash_bill"):
-                    conv.contexto_bot = clean_serializable(ctx)
-                    conv.last_message_at = now_utc()
-                    try:
-                        await db.commit()
-                    except Exception as e:
-                        logger.error(f"❌ Error commit final: {e}", exc_info=True)
-                        await db.rollback()
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                try:
+                    await db.commit()
+                except Exception as e:
+                    logger.error(f"❌ Error commit final: {e}", exc_info=True)
+                    await db.rollback()
                 await send_wa(phone, reply)
-
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
