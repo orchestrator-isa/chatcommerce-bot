@@ -48,10 +48,15 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
+from pydantic import BaseModel
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -286,6 +291,50 @@ class MenuPDF(Base):
     activo: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class PlatoCreate(BaseModel):
+    menu_id: uuid.UUID
+    precio: float
+    disponible: bool = True
+    orden: int = 0
+    traducciones: Dict[str, str]  # {"es": "nombre", "en": "name", ...}
+
+
+class PlatoUpdate(BaseModel):
+    precio: Optional[float] = None
+    disponible: Optional[bool] = None
+    orden: Optional[int] = None
+    traducciones: Optional[Dict[str, str]] = None
+
+
+class Campana(Base):
+    __tablename__ = "campanas"
+    id_campana: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    id_restaurante: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True))
+    nombre: Mapped[str] = mapped_column(String)
+    mensaje: Mapped[str] = mapped_column(String)
+    filtro: Mapped[dict] = mapped_column(JSONB, default=dict)
+    total_destinatarios: Mapped[int] = mapped_column(Integer, default=0)
+    enviados: Mapped[int] = mapped_column(Integer, default=0)
+    estado: Mapped[str] = mapped_column(String, default="borrador")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc
+    )
+
+
+class CampanaDestinatario(Base):
+    __tablename__ = "campana_destinatarios"
+    id_campana: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True
+    )
+    id_cliente: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True
+    )
+    enviado: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str] = mapped_column(String, nullable=True)
+
+
 # ============================================================
 # APP
 # ============================================================
@@ -296,10 +345,6 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 # ============================================================
 # HELPERS
 # ============================================================
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 async def send_wa(phone: str, text: str):
     if not WA_PHONE_ID or not WA_TOKEN:
         logger.info(f"[SIM-WA] {phone}: {text}")
@@ -1945,7 +1990,7 @@ RECEPCION_HTML = textwrap.dedent("""\
 // Función para cargar datos iniciales y periódicos (cada 30s)
 async function fetchData(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());const pend=await fetch('/api/v1/pedidos/pendientes').then(r=>r.json());renderReservas(r);renderPedidos(p);renderPendientes(pend);}catch(e){console.error(e);}}
 
-function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='<tr><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
+function renderReservas(data){const tbody=document.getElementById('reservas-body');if(!data.length){tbody.innerHTML='</table><td colspan="7" class="text-center">No hay reservas hoy</td></tr>';return;}
 tbody.innerHTML=data.map(r=>`<tr><td class="border p-2">${r.codigo_reserva}</td><td class="border p-2">${r.nombre_cliente||''}</td><td class="border p-2">${r.num_personas}</td><td class="border p-2">${r.hora_reserva}</td><td class="border p-2">${r.mesa_asignada||'-'}</td><td class="border p-2">${r.zona||'-'}</td><td class="border p-2">${r.estado}</td></tr>`).join('');}
 
 function renderPedidos(data){const tbody=document.getElementById('pedidos-body');if(!data.length){tbody.innerHTML='<tr><td colspan="5" class="text-center">No hay pedidos activos</td></tr>';return;}
@@ -1962,7 +2007,6 @@ function initSSE(){
     const eventSource = new EventSource('/api/v1/events');
     eventSource.addEventListener('nuevo_pedido', function(e){
         console.log('Nuevo pedido:', e.data);
-        // Recargar las tablas de pedidos activos y pendientes
         fetchData();
     });
     eventSource.addEventListener('nuevo_pedido_pendiente', function(e){
@@ -1975,7 +2019,6 @@ function initSSE(){
     };
 }
 
-// Inicializar: carga inicial, SSE, y refresco periódico como respaldo
 setInterval(fetchData, 30000);
 fetchData();
 initSSE();
@@ -1996,6 +2039,20 @@ loadMetrics();setInterval(loadMetrics,60000);</script></head>
 <div class="bg-white p-4 rounded shadow"><h3 class="text-lg font-bold">📅 Reservas hoy</h3><p id="reservas" class="text-2xl">-</p></div>
 <div class="bg-white p-4 rounded shadow"><h3 class="text-lg font-bold">👥 Clientes nuevos (30d)</h3><p id="clientes" class="text-2xl">-</p></div>
 <div class="bg-white p-4 rounded shadow"><h3 class="text-lg font-bold">🏦 Transferencias pendientes</h3><p id="pendientes" class="text-2xl">-</p></div></div></div></body></html>""")
+
+MENU_HTML = textwrap.dedent("""\
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script><title>Gestión de Menú - ISA</title></head>
+<body class="bg-gray-100 p-4"><div class="container mx-auto"><h1 class="text-2xl font-bold mb-4">🍽️ Gestión de Platos</h1>
+<p class="text-gray-600">Panel en construcción. Usa la API para gestionar platos.</p>
+<a href="/panel/recepcion" class="text-blue-500">← Volver</a></div></body></html>""")
+
+BROADCAST_HTML = textwrap.dedent("""\
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script><title>Campañas - ISA</title></head>
+<body class="bg-gray-100 p-4"><div class="container mx-auto"><h1 class="text-2xl font-bold mb-4">📢 Campañas Masivas</h1>
+<p class="text-gray-600">Panel en construcción. Usa el endpoint /api/v1/broadcast para crear campañas.</p>
+<a href="/panel/recepcion" class="text-blue-500">← Volver</a></div></body></html>""")
 
 
 @app.get("/panel/login")
@@ -2074,6 +2131,249 @@ async def wb_post(req: Request, bg: BackgroundTasks):
         return JSONResponse(content={"status": "rate_limited"}, status_code=429)
     bg.add_task(process_msg, await req.json())
     return JSONResponse(content={"status": "ok"}, status_code=200)
+
+
+@app.get("/api/v1/menus")
+async def list_menus(restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional)):
+    async with async_session_maker() as db:
+        menus = (
+            (
+                await db.execute(
+                    select(Menu).where(
+                        Menu.id_restaurante == restaurante_id, Menu.activo
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            {"id": str(m.id_menu), "nombre": "Menú principal"} for m in menus
+        ]
+
+
+@app.get("/api/v1/platos")
+async def list_platos(
+    menu_id: uuid.UUID,
+    lang: str = "es",
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    async with async_session_maker() as db:
+        platos = (
+            (
+                await db.execute(
+                    select(Plato)
+                    .where(Plato.id_menu == menu_id, Plato.disponible)
+                    .order_by(Plato.orden)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        trans = {}
+        if platos:
+            trans_stmt = select(PlatoTraduccion).where(
+                PlatoTraduccion.id_plato.in_([p.id_plato for p in platos]),
+                PlatoTraduccion.codigo_idioma == lang,
+            )
+            trans = {
+                tr.id_plato: tr.nombre
+                for tr in (await db.execute(trans_stmt)).scalars().all()
+            }
+        return [
+            {
+                "id": str(p.id_plato),
+                "nombre": trans.get(p.id_plato, f"Plato {p.id_plato}"),
+                "precio": float(p.precio),
+                "disponible": p.disponible,
+                "orden": p.orden,
+            }
+            for p in platos
+        ]
+
+
+@app.post("/api/v1/platos")
+async def create_plato(
+    data: PlatoCreate, restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional)
+):
+    async with async_session_maker() as db:
+        menu = (
+            await db.execute(
+                select(Menu).where(
+                    Menu.id_menu == data.menu_id, Menu.id_restaurante == restaurante_id
+                )
+            )
+        ).scalar_one_or_none()
+        if not menu:
+            raise HTTPException(404, "Menú no encontrado o no pertenece al restaurante")
+        plato = Plato(
+            id_menu=data.menu_id,
+            precio=Decimal(str(data.precio)),
+            disponible=data.disponible,
+            orden=data.orden,
+        )
+        db.add(plato)
+        await db.flush()
+        for lang, nombre in data.traducciones.items():
+            db.add(
+                PlatoTraduccion(
+                    id_plato=plato.id_plato, codigo_idioma=lang, nombre=nombre
+                )
+            )
+        await db.commit()
+        return {"id": str(plato.id_plato), "mensaje": "Plato creado"}
+
+
+@app.patch("/api/v1/platos/{id}")
+async def update_plato(
+    id: uuid.UUID,
+    data: PlatoUpdate,
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    async with async_session_maker() as db:
+        plato = (
+            await db.execute(
+                select(Plato).where(
+                    Plato.id_plato == id,
+                    Plato.id_menu == Menu.id_menu,
+                    Menu.id_restaurante == restaurante_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not plato:
+            raise HTTPException(404, "Plato no encontrado")
+        if data.precio is not None:
+            plato.precio = Decimal(str(data.precio))
+        if data.disponible is not None:
+            plato.disponible = data.disponible
+        if data.orden is not None:
+            plato.orden = data.orden
+        if data.traducciones:
+            for lang, nombre in data.traducciones.items():
+                stmt = select(PlatoTraduccion).where(
+                    PlatoTraduccion.id_plato == id,
+                    PlatoTraduccion.codigo_idioma == lang,
+                )
+                trans = (await db.execute(stmt)).scalar_one_or_none()
+                if trans:
+                    trans.nombre = nombre
+                else:
+                    db.add(
+                        PlatoTraduccion(id_plato=id, codigo_idioma=lang, nombre=nombre)
+                    )
+        await db.commit()
+        return {"status": "ok"}
+
+
+@app.delete("/api/v1/platos/{id}")
+async def delete_plato(
+    id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional)
+):
+    async with async_session_maker() as db:
+        plato = (
+            await db.execute(
+                select(Plato).where(
+                    Plato.id_plato == id,
+                    Plato.id_menu == Menu.id_menu,
+                    Menu.id_restaurante == restaurante_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not plato:
+            raise HTTPException(404, "Plato no encontrado")
+        plato.disponible = False
+        await db.commit()
+        return {"status": "ok"}
+
+
+class BroadcastRequest(BaseModel):
+    nombre: str
+    mensaje: str
+    filtro: str = "todos"
+
+
+@app.post("/api/v1/broadcast")
+async def crear_campana(
+    req: BroadcastRequest,
+    bg: BackgroundTasks,
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    if len(req.mensaje) > 1600:
+        raise HTTPException(400, "Mensaje demasiado largo (máx 1600 caracteres)")
+    async with async_session_maker() as db:
+        q = select(Cliente).where(Cliente.id_restaurante == restaurante_id)
+        if req.filtro == "activos_30d":
+            q = q.where(Cliente.created_at >= now_utc() - timedelta(days=30))
+        elif req.filtro == "inactivos_60d":
+            q = q.where(Cliente.created_at < now_utc() - timedelta(days=60))
+        # "todos" no modifica q
+        clientes = (await db.execute(q)).scalars().all()
+        if not clientes:
+            raise HTTPException(400, "No hay clientes para ese filtro")
+        campana = Campana(
+            id_restaurante=restaurante_id,
+            nombre=req.nombre,
+            mensaje=req.mensaje,
+            filtro={"tipo": req.filtro},
+            total_destinatarios=len(clientes),
+            estado="enviando",
+        )
+        db.add(campana)
+        await db.flush()
+        for c in clientes:
+            db.add(
+                CampanaDestinatario(
+                    id_campana=campana.id_campana, id_cliente=c.id_cliente
+                )
+            )
+        await db.commit()
+        bg.add_task(
+            _enviar_campana,
+            campana.id_campana,
+            restaurante_id,
+            req.mensaje,
+            [c.wa_id for c in clientes],
+        )
+        return {
+            "campana_id": str(campana.id_campana),
+            "total": len(clientes),
+            "estado": "enviando",
+        }
+
+
+async def _enviar_campana(
+    campana_id: uuid.UUID, restaurante_id: uuid.UUID, mensaje: str, wa_ids: List[str]
+):
+    enviados = 0
+    for i, wa_id in enumerate(wa_ids):
+        try:
+            await send_wa(wa_id, mensaje)
+            enviados += 1
+        except Exception as e:
+            logger.error(f"Error enviando a {wa_id}: {e}")
+        if (i + 1) % 10 == 0:
+            await asyncio.sleep(0.1)
+    async with async_session_maker() as db:
+        await db.execute(
+            update(Campana)
+            .where(Campana.id_campana == campana_id)
+            .values(enviados=enviados, estado="completada")
+        )
+        await db.commit()
+
+
+@app.get("/panel/menu")
+def p_menu(request: Request):
+    if request.session.get("auth") != "ok":
+        return RedirectResponse("/panel/login")
+    return HTMLResponse(content=MENU_HTML)
+
+
+@app.get("/panel/broadcast")
+def p_broadcast(request: Request):
+    if request.session.get("auth") != "ok":
+        return RedirectResponse("/panel/login")
+    return HTMLResponse(content=BROADCAST_HTML)
 
 
 if __name__ == "__main__":
