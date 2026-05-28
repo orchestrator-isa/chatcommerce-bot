@@ -2112,7 +2112,7 @@ def p_logout(request: Request):
 def health():
     return {
         "status": "ok",
-        "version": "18.2.3",
+        "version": "18.2.5",
         "db": "online" if engine else "offline",
     }
 
