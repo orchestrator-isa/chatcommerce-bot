@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v18.2.7 - FLUJO DE PEDIDO COMPLETO + CORRECCIONES
-- v18.2.7: Corrección SyntaxError (indentación) y limpieza estilo (E701/E702).
-- Flujo: entrega -> dirección (zona) -> pago -> efectivo/tarjeta.
-- Idiomas: ES/EN/FR/DAR (detección precoz).
+ORQUESTRATOR ISA v18.2.8 - FLUJO DE PEDIDO COMPLETO + MEJORAS
+- v18.2.8: Transferencia bancaria para clientes validados, validación de zona mejorada.
+- Flujo: entrega -> dirección (zona) -> pago -> efectivo/tarjeta/transferencia.
+- Idiomas: ES/EN/FR/DAR completos (todas las claves).
 - q: Reset atómico (evita MissingGreenlet).
 """
 import os
@@ -66,11 +66,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("orquestrator_bot")
 
-DATABASE_URL = os.getenv("DATABASE_URL", " ").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
-WA_TOKEN = os.getenv("WHATSAPP_TOKEN", " ").strip()
-WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", " ").strip()
+WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
+WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", "").strip()
 
 if not DATABASE_URL:
     logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
@@ -301,7 +301,7 @@ class BroadcastRequest(BaseModel):
 # ============================================================
 # APP
 # ============================================================
-app = FastAPI(title="Orquestrator ISA v18.2.7")
+app = FastAPI(title="Orquestrator ISA v18.2.8")
 app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
@@ -387,19 +387,52 @@ async def guardar_mensaje(db: AsyncSession, id_conv: uuid.UUID, direccion: str, 
 
 
 # ============================================================
-# ZONAS Y VALIDACIÓN
+# ZONAS Y VALIDACIÓN MEJORADA
 # ============================================================
-ZONA_PERMITIDA = ["av. mohamed v", "calle sevilla", "plaza primo", "restinga", "tetouan", "tetuán"]
+# Lista ampliada de zonas permitidas (incluye variantes sin "av." y con diferentes grafías)
+ZONA_PERMITIDA = [
+    "av. mohamed v",
+    "av. mohamed",
+    "av. muhamed",
+    "av. muhammed",
+    "av. mohammed",
+    "av. muhammad",
+    "mohamed v",
+    "muhamed v",
+    "muhammed v",
+    "mohammed v",
+    "muhammad v",
+    "calle sevilla",
+    "plaza primo",
+    "restinga",
+    "tetouan",
+    "tetuán",
+    "av mohamed v",         # sin punto
+    "av mohamed",           # sin punto
+    "avenida mohamed v",
+    "avenida mohamed",
+]
 
 
-def validar_zona(addr: str, umbral: float = 0.65) -> bool:
+def validar_zona(addr: str, umbral: float = 0.60) -> bool:
+    """
+    Valida dirección usando coincidencia difusa (difflib) y umbral.
+    Normaliza: elimina puntuación, convierte a minúsculas, elimina espacios extra.
+    Compara la dirección limpia con cada zona de la lista ampliada.
+    """
     addr_lower = addr.lower().strip()
+    # Eliminar puntuación y espacios múltiples
     addr_clean = re.sub(r"[^\w\s]", "", addr_lower)
+    addr_clean = re.sub(r"\s+", " ", addr_clean).strip()
+    # Tomar primeros 80 caracteres (suficiente para una calle)
     short_addr = addr_clean[:80]
     for zona in ZONA_PERMITIDA:
         zona_clean = zona.lower().replace(".", "").replace(",", "")
+        zona_clean = re.sub(r"\s+", " ", zona_clean).strip()
+        # Coincidencia exacta de subcadena (rápida)
         if zona_clean in short_addr:
             return True
+        # Coincidencia difusa
         ratio = SequenceMatcher(None, zona_clean, short_addr).ratio()
         if ratio >= umbral:
             return True
@@ -433,7 +466,7 @@ async def calc_tiempo(db: AsyncSession, rid: uuid.UUID, tipo: str, n_platos: int
 
 
 # ============================================================
-# IDIOMAS Y TRADUCCIONES
+# IDIOMAS Y TRADUCCIONES (completas para transferencia)
 # ============================================================
 IDIOMA_KEYWORDS = {
     "es": ["hola", "buenas", "gracias", "quiero", "menu", "pedido", "español"],
@@ -468,9 +501,16 @@ I18N = {
         "address_request": "📍 Escribe tu dirección completa:\n(Calle, número, referencia)",
         "invalid_zone": "❌ Solo enviamos a zonas cercanas (Av. Mohamed V, Plaza Primo...).\nElige `1` (Recoger) o reintenta con otra dirección:",
         "payment_method": "💳 Método de pago\n1. Efectivo\n2. Tarjeta (solo recoger)\n\nResponde con el número:",
+        "payment_method_with_bank": "💳 Método de pago\n1. Efectivo\n2. Tarjeta (solo recoger)\n3. Transferencia bancaria\n\nResponde con el número:",
         "cash_bill_request": "💰 Pago en efectivo\n¿Con qué billete pagas? (ej: 50, 100, 200)",
         "change_calculated": "💶 Cambio: {cambio} MAD.\n\n✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Efectivo\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
         "card_confirm": "✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Tarjeta\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
+        "card_not_available_for_delivery": "❌ Tarjeta solo disponible en local. Elige `1` (Efectivo).",
+        "bank_transfer_instructions": "🏦 Transferencia bancaria\nRealiza el pago a la siguiente cuenta:\n\nBanco: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcepto: PEDIDO #{numero}\nImporte: {total} MAD\n\nEnvía el comprobante por este chat. Tu pedido se confirmará manualmente.\n\nGracias.",
+        "bank_transfer_pending": "✅ Pedido #{numero} registrado. Pendiente de confirmación de pago.\nTe avisaremos cuando esté confirmado.",
+        "bank_transfer_confirmed": "✅ Pago confirmado. Tu pedido #{numero} está en preparación.\n⏱️ {tiempo}\nGracias 🙏",
+        "pickup": "Recogida",
+        "delivery": "Domicilio",
         "res_personas": "👥 ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)",
@@ -497,9 +537,16 @@ I18N = {
         "address_request": "📍 Enter full address:",
         "invalid_zone": "❌ Delivery only to nearby areas. Choose `1` (Pick up) or retry:",
         "payment_method": "💳 Payment\n1. Cash\n2. Card (pick up only)\n\nReply with number:",
+        "payment_method_with_bank": "💳 Payment\n1. Cash\n2. Card (pick up only)\n3. Bank transfer\n\nReply with number:",
         "cash_bill_request": "💰 Cash payment\nWhich bill? (e.g., 50, 100, 200)",
         "change_calculated": "💶 Change: {cambio} MAD.\n\n✅ Order #{numero}\n🚚 {delivery_type}\n💳 Cash\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
         "card_confirm": "✅ Order #{numero}\n🚚 {delivery_type}\n💳 Card\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
+        "card_not_available_for_delivery": "❌ Card only available for pick up. Choose `1` (Cash).",
+        "bank_transfer_instructions": "🏦 Bank transfer\nMake the payment to the following account:\n\nBank: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: ORDER #{numero}\nAmount: {total} MAD\n\nSend the proof via this chat. Your order will be manually confirmed.\n\nThanks.",
+        "bank_transfer_pending": "✅ Order #{numero} registered. Waiting for payment confirmation.\nWe will notify you when confirmed.",
+        "bank_transfer_confirmed": "✅ Payment confirmed. Your order #{numero} is being prepared.\n⏱️ {tiempo}\nThanks 🙏",
+        "pickup": "Pick up",
+        "delivery": "Home delivery",
         "res_personas": "👥 How many people? (reply number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)",
         "res_hora": "🕐 Time? (HH:MM)",
@@ -514,10 +561,74 @@ I18N = {
     "fr": {
         "welcome": "🌍 Bienvenue à {restaurante}\nChoisissez votre langue:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` pour télécharger le menu",
         "lang_selected": "✅ Langue sauvegardée: Français\n\n📋 Commandes:\n`m` → Menu\n`v` → Panier\n`c` → Confirmer\n`r` → Réserver\n`q` → Quitter\n\nTapez `m` pour le menu.",
+        "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
+        "menu_item": "{num}. {nombre} — {precio} MAD",
+        "menu_footer": "\n`n` → ➡️ Suivant\n`a` → ⬅️ Précédent\n🛒 Numéro pour ajouter\n📄 `menu pdf` pour PDF",
+        "added": "✅ {plato} ajouté. Total: {total} MAD.",
+        "cart": "🛒 COMMANDE\n{items}\n💰 Total: {total} MAD",
+        "cart_empty": "🛒 Panier vide.",
+        "confirm_empty": "⚠️ Panier vide.",
+        "help": "🤔 Commandes:\n`m` → Menu\n`v` → Voir\n`c` → Confirmer\n`x N` → Supprimer\n`r` → Réserver\n`q` → Quitter",
+        "delivery_type": "🚚 Type de livraison\n1. À emporter\n2. Livraison à domicile\n\nRépondez par le numéro:",
+        "address_request": "📍 Adresse complète:",
+        "invalid_zone": "❌ Livraison uniquement dans certaines zones. Choisissez `1` (À emporter) ou réessayez:",
+        "payment_method": "💳 Mode de paiement\n1. Espèces\n2. Carte (sur place uniquement)\n\nRépondez:",
+        "payment_method_with_bank": "💳 Mode de paiement\n1. Espèces\n2. Carte (sur place uniquement)\n3. Virement bancaire\n\nRépondez:",
+        "cash_bill_request": "💰 Paiement en espèces\nQuel billet? (ex: 50, 100, 200)",
+        "change_calculated": "💶 Monnaie: {cambio} MAD.\n\n✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Espèces\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_confirm": "✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_not_available_for_delivery": "❌ Carte uniquement sur place. Choisissez `1` (Espèces).",
+        "bank_transfer_instructions": "🏦 Virement bancaire\nEffectuez le paiement sur le compte suivant:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: COMMANDE #{numero}\nMontant: {total} MAD\n\nEnvoyez la preuve via ce chat. Votre commande sera confirmée manuellement.\n\nMerci.",
+        "bank_transfer_pending": "✅ Commande #{numero} enregistrée. En attente de confirmation de paiement.\nNous vous notifierons lorsqu'elle sera confirmée.",
+        "bank_transfer_confirmed": "✅ Paiement confirmé. Votre commande #{numero} est en préparation.\n⏱️ {tiempo}\nMerci 🙏",
+        "pickup": "À emporter",
+        "delivery": "Domicile",
+        "res_personas": "👥 Combien de personnes? (répondez un nombre)",
+        "res_fecha": "📅 Date? (YYYY-MM-DD)",
+        "res_hora": "🕐 Heure? (HH:MM)",
+        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n📅 {fecha} 🕐 {hora}\nRépondez `oui` pour confirmer",
+        "res_saved": "✅ Réservation enregistrée! Code: {codigo}",
+        "res_cancel": "❌ Réservation annulée.",
+        "res_error_disabled": "❌ Réservations non activées.",
+        "res_error_date_range": "❌ Jusqu'à {max} jours.",
+        "res_error_hours": "❌ Fermé à cette heure.",
+        "res_error_capacity": "❌ Maximum {max} personnes.",
     },
     "dar": {
         "welcome": "🌍 Mrahba bik f {restaurante}\nKhtar lougha:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` bach tchouf lmenu",
         "lang_selected": "✅ Lougha tssajlat: Darija\n\n📋 Comandos:\n`m` → Menu\n`v` → Panier\n`c` → Confirmi\n`r` → Reservi\n`q` → Ħerreb\n\nKteb `m` bach tchouf lmenu.",
+        "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
+        "menu_item": "{num}. {nombre} — {precio} MAD",
+        "menu_footer": "\n`n` → ➡️ Mzyan\n`a` → ⬅️ Lwer\n🛒 Raqem bach tzid\n📄 `menu pdf` bach tchouf PDF",
+        "added": "✅ {plato} tzad. Total: {total} MAD.",
+        "cart": "🛒 TALAB\n{items}\n💰 Total: {total} MAD",
+        "cart_empty": "🛒 Panier khawi.",
+        "confirm_empty": "⚠️ Panier khawi.",
+        "help": "🤔 Comandos:\n`m` → Menu\n`v` → Chouf\n`c` → Confirmi\n`x N` → Hiyed\n`r` → Reservi\n`q` → Ħerreb",
+        "delivery_type": "🚚 Nawa3 d l'livraison\n1. Ħed l'local\n2. Domicile\n\nRépondez b raqem:",
+        "address_request": "📍 Kteb l'adresse kamla:",
+        "invalid_zone": "❌ Kanţelquw fchi zones (Av. Mohamed V, Plaza Primo...). Khtar `1` (Ħed l'local) aw jawb b adresse okhra:",
+        "payment_method": "💳 Tarf d l'paiement\n1. Naqdiya\n2. Carte (ghir f l'local)\n\nRépondez:",
+        "payment_method_with_bank": "💳 Tarf d l'paiement\n1. Naqdiya\n2. Carte (ghir f l'local)\n3. Transfert bancaire\n\nRépondez:",
+        "cash_bill_request": "💰 Paiement b naqdiya\nB ache flous? (mthal: 50, 100, 200)",
+        "change_calculated": "💶 Reste: {cambio} MAD.\n\n✅ Talab #{numero}\n🚚 {delivery_type}\n💳 Naqdiya\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_confirm": "✅ Talab #{numero}\n🚚 {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_not_available_for_delivery": "❌ Carte ghir f l'local. Khtar `1` (Naqdiya).",
+        "bank_transfer_instructions": "🏦 Transfert bancaire\nĦawel l flous f l'compte:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: TALAB #{numero}\nMontant: {total} MAD\n\nBaat l'wassl f had l'chat. Talab ghadi ytettfiq men baad.\n\nMerci.",
+        "bank_transfer_pending": "✅ Talab #{numero} tsejjel. Katstanna tettfiq d l'paiement.\nGhandek n3lmouk.",
+        "bank_transfer_confirmed": "✅ Paiement tettfiq. Talab #{numero} tayb.\n⏱️ {tiempo}\nMerci 🙏",
+        "pickup": "Ħed l'local",
+        "delivery": "Domicile",
+        "res_personas": "👥 Hal ch7al mn personne? (jawb b raqem)",
+        "res_fecha": "📅 Anta tarix? (YYYY-MM-DD)",
+        "res_hora": "🕐 Anta sa3a? (HH:MM)",
+        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n📅 {fecha} 🕐 {hora}\nJawb `si` bach tettfiq",
+        "res_saved": "✅ Réservation tsejjel! Code: {codigo}",
+        "res_cancel": "❌ Réservation tlagt.",
+        "res_error_disabled": "❌ Réservations makaynch mfe3lin.",
+        "res_error_date_range": "❌ Hadi {max} nharat.",
+        "res_error_hours": "❌ Restaurant msaker f had l'waqt.",
+        "res_error_capacity": "❌ Max {max} personnes.",
     },
 }
 
@@ -748,7 +859,11 @@ async def process_msg(payload: dict):
                 if txt == "1":
                     ctx["pedido_temp"] = {"tipo": "recoger"}
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    # Mostrar el mensaje de pago adecuado (con o sin transferencia)
+                    if cli.validado:
+                        reply = t("payment_method_with_bank", lang)
+                    else:
+                        reply = t("payment_method", lang)
                 elif txt == "2":
                     ctx["pedido_temp"] = {"tipo": "domicilio"}
                     ctx["fase"] = "direccion"
@@ -762,11 +877,17 @@ async def process_msg(payload: dict):
                     if "dir" in ctx["pedido_temp"]:
                         ctx["pedido_temp"].pop("dir")
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    if cli.validado:
+                        reply = t("payment_method_with_bank", lang)
+                    else:
+                        reply = t("payment_method", lang)
                 elif validar_zona(txt_raw):
                     ctx["pedido_temp"]["dir"] = txt_raw.strip()
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    if cli.validado:
+                        reply = t("payment_method_with_bank", lang)
+                    else:
+                        reply = t("payment_method", lang)
                 else:
                     reply = t("invalid_zone", lang)
 
@@ -821,8 +942,52 @@ async def process_msg(payload: dict):
                         await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
                         await send_wa(phone, reply)
                         return
+                elif txt == "3" and cli.validado:  # Transferencia bancaria
+                    ctx["pedido_temp"]["pago"] = "transferencia"
+                    total = sum(i["precio"] for i in items)
+                    tipo = ctx["pedido_temp"].get("tipo", "recoger")
+                    ped = Pedido(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        items=[{"nombre": i["nombre"], "precio": i["precio"]} for i in items],
+                        total=Decimal(str(total)),
+                        delivery_type=tipo,
+                        direccion=ctx["pedido_temp"].get("dir"),
+                        metodo_pago="transferencia",
+                        estado=EstadoPedido.pendiente_confirmacion,
+                    )
+                    db.add(ped)
+                    await db.flush()
+                    instrucciones = t(
+                        "bank_transfer_instructions",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                        total=total,
+                    )
+                    await send_wa(phone, instrucciones)
+                    reply = t(
+                        "bank_transfer_pending",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                    )
+                    ctx["carrito"] = []
+                    ctx.pop("pedido_temp", None)
+                    ctx["fase"] = "menu"
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
+                    await event_manager.publish(
+                        "nuevo_pedido_pendiente",
+                        {"id": str(ped.id_pedido), "total": float(total), "tipo": "transferencia", "timestamp": now_utc().isoformat()},
+                    )
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
                 else:
-                    reply = t("payment_method", lang)
+                    if cli.validado:
+                        reply = t("payment_method_with_bank", lang)
+                    else:
+                        reply = t("payment_method", lang)
 
             elif fase == "cash_bill":
                 try:
@@ -1035,7 +1200,7 @@ async def process_msg(payload: dict):
                             "res_confirm",
                             lang,
                             personas=ctx.get("res_personas", 1),
-                            fecha=ctx.get("res_fecha", " "),
+                            fecha=ctx.get("res_fecha", ""),
                             hora=txt_raw,
                         )
                 except ValueError:
@@ -1351,8 +1516,8 @@ async def update_plato(id: uuid.UUID, data: PlatoUpdate, restaurante_id: uuid.UU
             plato.orden = data.orden
         if data.traducciones:
             for lang, nombre in data.traducciones.items():
-                res_t = await db.execute(select(PlatoTraduccion).where(PlatoTraduccion.id_plato == id, PlatoTraduccion.codigo_idioma == lang))
-                trans = res_t.scalar_one_or_none()
+                trans_res = await db.execute(select(PlatoTraduccion).where(PlatoTraduccion.id_plato == id, PlatoTraduccion.codigo_idioma == lang))
+                trans = trans_res.scalar_one_or_none()
                 if trans:
                     trans.nombre = nombre
                 else:
@@ -1406,7 +1571,7 @@ async def export_pedidos_csv(restaurante_id: uuid.UUID = Depends(get_restaurante
         writer = csv.writer(output)
         writer.writerow(["id_pedido", "id_cliente", "estado", "delivery_type", "metodo_pago", "direccion", "total", "items", "created_at"])
         for p in pedidos:
-            writer.writerow([str(p.id_pedido), str(p.id_cliente), p.estado.value, p.delivery_type or " ", p.metodo_pago or " ", p.direccion or " ", float(p.total), str(p.items), p.created_at.isoformat()])
+            writer.writerow([str(p.id_pedido), str(p.id_cliente), p.estado.value, p.delivery_type or "", p.metodo_pago or "", p.direccion or "", float(p.total), str(p.items), p.created_at.isoformat()])
         output.seek(0)
         return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=pedidos.csv"})
 
@@ -1506,7 +1671,7 @@ renderReservas(r); renderPedidos(p);
 }
 function renderReservas(data){
 const tb = document.getElementById('reservas-tb');
-if(!data.length){ tb.innerHTML='<tr><td colspan="6" class="p-4 text-center text-gray-500">Sin reservas hoy</td></tr>'; return; }
+if(!data.length){ tb.innerHTML='<tr><td colspan="6" class="p-4 text-center text-gray-500">Sin reservas hoy</td><tr>'; return; }
 tb.innerHTML = data.map(x=>`<tr>
 <td class="p-2 border">${x.codigo_reserva}</td>
 <td class="p-2 border">${x.num_personas}</td>
@@ -1516,8 +1681,8 @@ tb.innerHTML = data.map(x=>`<tr>
 <td class="p-2 border">
 <button onclick="patchRes('${x.id}','confirmar')" class="bg-blue-500 text-white px-2 py-1 rounded text-sm">✓</button>
 <button onclick="patchRes('${x.id}','cancelar')" class="bg-red-500 text-white px-2 py-1 rounded text-sm">✕</button>
-</td>
-</tr>`).join('');
+\n</td>
+\n</tr>`).join('');
 }
 async function patchRes(id,acc){ await fetch(`/api/v1/reservaciones/${id}/${acc}`,{method:'PATCH'}); fetchData(); }
 function renderPedidos(data){
@@ -1588,12 +1753,14 @@ fetchData(); loadChatList(); initSSE(); showTab('recepcion');
 <div id="recepcion" class="tab-content active p-4">
 <h2 class="text-xl font-bold mb-3">📅 Reservas de hoy</h2>
 <table class="w-full border-collapse"><thead class="bg-gray-700"><tr><th class="p-2">Código</th><th class="p-2">Pers.</th><th class="p-2">Hora</th><th class="p-2">Mesa</th><th class="p-2">Estado</th><th class="p-2">Acciones</th></tr></thead>
-<tbody id="reservas-tb"><tr><td colspan="6" class="p-4 text-center">Cargando...</td></tr></tbody></table>
+<tbody id="reservas-tb"><tr><td colspan="6" class="p-4 text-center">Cargando...</td></tr></tbody>
+</table>
 </div>
 <div id="pedidos" class="tab-content p-4">
 <h2 class="text-xl font-bold mb-3">🛒 Pedidos Activos</h2>
 <table class="w-full border-collapse"><thead class="bg-gray-700"><tr><th class="p-2">ID</th><th class="p-2">Total</th><th class="p-2">Tipo</th><th class="p-2">Estado</th></tr></thead>
-<tbody id="pedidos-tb"><tr><td colspan="4" class="p-4 text-center">Cargando...</td></tr></tbody></table>
+<tbody id="pedidos-tb"><tr><td colspan="4" class="p-4 text-center">Cargando...</td></tr></tbody>
+</table>
 </div>
 <div id="chats" class="tab-content p-4">
 <div class="grid grid-cols-3 gap-4 h-[70vh]">
@@ -1653,7 +1820,7 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "18.2.7", "db": "online" if engine else "offline"}
+    return {"status": "ok", "version": "18.2.8", "db": "online" if engine else "offline"}
 
 
 @app.get("/api/whatsapp/webhook")
