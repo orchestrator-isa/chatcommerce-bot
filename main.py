@@ -1849,24 +1849,150 @@ PANEL_HTML = textwrap.dedent("""\
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
 <title>Panel ISA - Restinga</title>
-<style>.tab-content{display:none}.tab-content.active{display:block}.tab-btn.active{border-bottom:2px solid #EAB308;color:#EAB308}</style>
+<style>
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  .tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }
+</style>
 <script>
-function showTab(tabId){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.getElementById(tabId).classList.add('active');document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active','text-yellow-400','border-yellow-400'));document.querySelector(`[data-tab="${tabId}"]`).classList.add('active','text-yellow-400','border-yellow-400');if(tabId==='recepcion')loadRecepcion();if(tabId==='metricas')loadMetricas();if(tabId==='chats')loadChatList();}
-async function loadRecepcion(){try{const r=await fetch('/api/v1/reservaciones/hoy').then(r=>r.json());const p=await fetch('/api/v1/pedidos/activos').then(r=>r.json());document.getElementById('reservas-tb').innerHTML=r.length?r.map(x=>`<tr><td class="p-2">${x.codigo_reserva}</td><td class="p-2">${x.num_personas}</td><td class="p-2">${x.hora_reserva}</td><td class="p-2">${x.mesa_asignada||'-'}</td><td class="p-2"><span class="px-2 py-1 rounded ${x.estado=='pendiente'?'bg-yellow-500':'bg-green-500'} text-black">${x.estado}</span></td><td class="p-2">${x.estado=='pendiente'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">✓</button>`:'-'}</td></tr>`).join(''):'<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';document.getElementById('pedidos-tb').innerHTML=p.length?p.map(x=>`<tr><td class="p-2">${x.id.slice(0,8)}</td><td class="p-2">${x.total} MAD</td><td class="p-2">${x.delivery_type||'-'}</td><td class="p-2"><span class="px-2 py-1 rounded bg-blue-500 text-black">${x.estado}</span></td></tr>`).join(''):'<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';}catch(e){}}
-async function confirmarReserva(id){if(!confirm('¿Confirmar reserva?'))return;const res=await fetch(`/api/v1/reservaciones/${id}/confirmar`,{method:'PATCH'});if(res.ok){alert('✅ Confirmada');loadRecepcion();}}
-async function loadMetricas(){const d=await fetch('/api/v1/dashboard/hoy').then(r=>r.json());document.getElementById('metricas-data').innerHTML=`<div class="bg-gray-700 p-4 rounded text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p class="text-gray-400">Ingresos</p></div><div class="bg-gray-700 p-4 rounded text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p class="text-gray-400">Pedidos</p></div><div class="bg-gray-700 p-4 rounded text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p class="text-gray-400">Reservas</p></div>`;}
-async function loadChatList(){const list=await fetch('/api/v1/conversaciones').then(r=>r.json());document.getElementById('chat-list').innerHTML=list.length?list.map(c=>`<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase}</div></div>`).join(''):'<div class="text-gray-400 text-center py-4">Sin chats</div>';}
-async function openChat(id,wa){document.getElementById('chat-header').innerText=`💬 ${wa}`;const msgs=await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r=>r.json());document.getElementById('chat-messages').innerHTML=msgs.map(m=>`<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'}"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Vacío]'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');}
-setInterval(()=>{if(document.getElementById('recepcion').classList.contains('active'))loadRecepcion();if(document.getElementById('chats').classList.contains('active')&&document.getElementById('chat-header').innerText!=='Selecciona chat')openChat(document.getElementById('chat-header').innerText.replace('💬 ',''),document.getElementById('chat-header').innerText.replace('💬 ',''));},15000);
-document.addEventListener('DOMContentLoaded',()=>{loadRecepcion();loadChatList();showTab('recepcion');});
-</script></head>
+function showTab(tabId) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+  if(tabId === 'recepcion') loadRecepcion();
+  if(tabId === 'metricas') loadMetricas();
+  if(tabId === 'chats') loadChatList();
+}
+
+async function loadRecepcion() {
+  try {
+    const [r, p] = await Promise.all([
+      fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
+      fetch('/api/v1/pedidos/activos').then(r => r.json())
+    ]);
+    const tbRes = document.getElementById('reservas-tb');
+    tbRes.innerHTML = r.length ? r.map(x => `<tr>
+      <td class="p-2 border border-gray-600">${x.codigo_reserva}</td>
+      <td class="p-2 border border-gray-600">${x.num_personas}</td>
+      <td class="p-2 border border-gray-600">${x.hora_reserva}</td>
+      <td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td>
+      <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='pendiente'?'bg-yellow-600 text-black':'bg-green-600 text-black'}">${x.estado}</span></td>
+      <td class="p-2 border border-gray-600">${x.estado=='pendiente' ? `<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button>` : '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
+
+    const tbPed = document.getElementById('pedidos-tb');
+    tbPed.innerHTML = p.length ? p.map(x => `<tr>
+      <td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td>
+      <td class="p-2 border border-gray-600">${x.total} MAD</td>
+      <td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td>
+      <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td>
+    </tr>`).join('') : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
+  } catch(e) { console.error('Error recepción:', e); }
+}
+
+async function confirmarReserva(id) {
+  if(!confirm('¿Confirmar esta reserva?')) return;
+  try {
+    const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, { method: 'PATCH' });
+    if(res.ok) {
+      alert('✅ Reserva confirmada');
+      loadRecepcion();
+    } else {
+      const err = await res.json().catch(() => 'Error desconocido');
+      alert(`❌ Error: ${err.detail || res.statusText}`);
+    }
+  } catch(e) { alert('❌ Error de red o servidor'); }
+}
+
+async function loadMetricas() {
+  try {
+    const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
+    document.getElementById('metricas-data').innerHTML = `
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p class="text-gray-400">Ingresos hoy</p></div>
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p class="text-gray-400">Pedidos hoy</p></div>
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p class="text-gray-400">Reservas hoy</p></div>
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-purple-400">${d.clientes_nuevos_30d}</h3><p class="text-gray-400">Clientes nuevos (30d)</p></div>
+    `;
+  } catch(e) { console.error('Error métricas:', e); }
+}
+
+async function loadChatList() {
+  try {
+    const list = await fetch('/api/v1/conversaciones').then(r => r.json());
+    const container = document.getElementById('chat-list');
+    container.innerHTML = list.length ? list.map(c => `
+      <div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition">
+        <div class="font-bold text-sm">📱 ${c.wa_id}</div>
+        <div class="text-xs text-gray-400">Fase: ${c.fase} | ${new Date(c.last_message_at).toLocaleTimeString()}</div>
+      </div>
+    `).join('') : '<div class="text-gray-400 text-center py-4">Sin conversaciones</div>';
+  } catch(e) { console.error('Error chats:', e); }
+}
+
+async function openChat(id, wa) {
+  document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
+  try {
+    const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
+    const container = document.getElementById('chat-messages');
+    container.innerHTML = msgs.map(m => `
+      <div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2">
+        <div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">
+          ${m.contenido || '<i class="text-gray-300">[Sin contenido]</i>'}
+          <div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div>
+        </div>
+      </div>
+    `).join('');
+    container.scrollTop = container.scrollHeight;
+  } catch(e) { console.error('Error mensajes:', e); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadRecepcion();
+  setInterval(() => { 
+    if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); 
+  }, 15000);
+});
+</script>
+</head>
 <body class="bg-gray-900 text-gray-100 min-h-screen p-4">
 <div class="max-w-7xl mx-auto bg-gray-800 rounded-lg shadow-xl overflow-hidden">
-<nav class="flex border-b border-gray-700"><button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400">📅 Recepción</button><button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400">📊 Métricas</button><button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400">💬 Chats</button><a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 ml-auto">🚪 Salir</a></nav>
-<div id="recepcion" class="tab-content active p-6"><h2 class="text-xl font-bold mb-4">📅 Reservas</h2><div class="overflow-x-auto bg-gray-700 rounded-lg p-4 mb-6"><table class="w-full text-left"><thead class="bg-gray-600 text-gray-200"><tr><th class="p-2">Código</th><th class="p-2">Pers.</th><th class="p-2">Hora</th><th class="p-2">Mesa</th><th class="p-2">Estado</th><th class="p-2">Acción</th></tr></thead><tbody id="reservas-tb"></tbody></table></div><h2 class="text-xl font-bold mb-4">🛒 Pedidos Activos</h2><div class="overflow-x-auto bg-gray-700 rounded-lg p-4"><table class="w-full text-left"><thead class="bg-gray-600 text-gray-200"><tr><th class="p-2">ID</th><th class="p-2">Total</th><th class="p-2">Tipo</th><th class="p-2">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table></div></div>
-<div id="metricas" class="tab-content p-6"><h2 class="text-xl font-bold mb-4">📊 Dashboard</h2><div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div></div>
-<div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
-</div></body></html>""")
+  <nav class="flex border-b border-gray-700">
+    <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
+    <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
+    <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+    <button data-tab="campanas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📢 Campañas</button>
+    <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto">🚪 Salir</a>
+  </nav>
+
+  <div id="recepcion" class="tab-content active p-6">
+    <h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
+    <h2 class="text-xl font-bold mb-4 mt-8">🛒 Pedidos Activos</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
+  </div>
+
+  <div id="metricas" class="tab-content p-6">
+    <h2 class="text-xl font-bold mb-4">📊 Dashboard del día</h2>
+    <div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div>
+  </div>
+
+  <div id="chats" class="tab-content p-6 h-[75vh]">
+    <div class="grid grid-cols-3 gap-4 h-full">
+      <div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div>
+      <div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col">
+        <div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona una conversación</div>
+        <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="campanas" class="tab-content p-6">
+    <h2 class="text-xl font-bold mb-4">📢 Envío Masivo</h2>
+    <p class="text-gray-400">Usa el endpoint <code>POST /api/v1/broadcast</code> con tu API Key o integra el formulario aquí.</p>
+  </div>
+</div>
+</body></html>""")
 
 
 @app.get("/panel/recepcion")
