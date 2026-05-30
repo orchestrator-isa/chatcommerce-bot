@@ -998,7 +998,7 @@ async def process_msg(payload: dict):
                 await send_wa(phone, t("welcome", detected_lang, restaurante=rname))
                 return
 
-            # --- FLUJO POR FASE ---
+            # --- 3. FLUJO POR FASE ---
             reply = ""
             fase = ctx["fase"]
             lang_map = {
@@ -1510,8 +1510,7 @@ async def process_msg(payload: dict):
             else:
                 ctx["fase"] = "lang"
                 reply = t("welcome", lang, restaurante=rname)
-
-            # Guardar contexto final y enviar respuesta
+            # GUARDAR CONTEXTO Y ENVIAR
             if reply:
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
@@ -1524,6 +1523,7 @@ async def process_msg(payload: dict):
                 await send_wa(phone, reply)
 
     except Exception as e:
+        # Este except CIERRA el try principal de la función (indentación 4 espacios)
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
 
@@ -2431,31 +2431,11 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 </body></html>""")
 
+
 # ============================================================
 # RUTAS DEL PANEL (usando solo PANEL_HTML y LOGIN_HTML)
 # ============================================================
-@app.get("/panel/login")
-def p_login():
-    return HTMLResponse(content=LOGIN_HTML)
 
-@app.post("/panel/login")
-async def p_login_post(request: Request, api_key: str = Form(...)):
-    if not async_session_maker:
-        return HTMLResponse(content=LOGIN_HTML + "<p class='text-red-500'>Error de conexión</p>")
-    async with async_session_maker() as db:
-        res = await db.execute(
-            select(ApiKey).where(
-                ApiKey.key_value == api_key,
-                ApiKey.activo.is_(True),
-                (ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now_utc()),
-            )
-        )
-        ak = res.scalar_one_or_none()
-        if ak:
-            request.session["auth"] = "ok"
-            request.session["api_key"] = api_key
-            return RedirectResponse("/panel/recepcion", status_code=303)
-        return HTMLResponse(content=LOGIN_HTML + "<p class='text-red-500'>API Key inválida</p>")
 
 @app.get("/panel/recepcion")
 def p_recep(request: Request):
