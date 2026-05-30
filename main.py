@@ -866,11 +866,12 @@ async def sse_events(
 
 
 # ============================================================
-# BOT: PROCESAMIENTO DE MENSAJES
+# BOT: PROCESAMIENTO DE MENSAJES (v18.2.8 - BLOQUE FINAL)
 # ============================================================
 async def process_msg(payload: dict):
     if not async_session_maker:
         return
+
     try:
         entry = payload["entry"][0]
         val = entry["changes"][0]["value"]
@@ -886,6 +887,7 @@ async def process_msg(payload: dict):
             # 1. Cliente
             stmt_cli = select(Cliente).where(Cliente.wa_id == phone)
             cli = (await db.execute(stmt_cli)).scalar_one_or_none()
+
             if not cli:
                 rest_stmt = (
                     select(Restaurante)
@@ -924,6 +926,7 @@ async def process_msg(payload: dict):
                 .limit(1)
             )
             conv = (await db.execute(stmt_conv)).scalar_one_or_none()
+
             if not conv:
                 conv = Conversacion(
                     id_cliente=cli.id_cliente,
@@ -939,7 +942,6 @@ async def process_msg(payload: dict):
                 await db.flush()
                 await db.refresh(conv)
 
-            # Guardar mensaje entrante
             if conv:
                 await guardar_mensaje(db, conv.id_conversacion, "inbound", txt_raw)
 
@@ -952,7 +954,7 @@ async def process_msg(payload: dict):
 
             logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
 
-            # --- 0. RESET GLOBAL (q) ---
+            # --- RESET GLOBAL ---
             if txt in ("q", "salir", "quit"):
                 try:
                     nuevo_ctx = {
@@ -972,25 +974,21 @@ async def process_msg(payload: dict):
                     )
                     await db.execute(stmt)
                     await db.commit()
-                    logger.info(
-                        f"✅ q ejecutado: fase reseteada a 'lang' para {cli.wa_id}"
-                    )
                 except Exception as e:
-                    logger.error(f"❌ Error en q: {e}", exc_info=True)
+                    logger.error(f"Error en reset: {e}", exc_info=True)
                     await db.rollback()
-                    return
                 await send_wa(phone, t("welcome", cli.language_pref, restaurante=rname))
                 return
 
-            # --- 1. PDF ---
+            # --- PDF ---
             if txt == "menu pdf":
                 await send_wa(
                     phone,
-                    f"📄 *Menú Digital de Restinga*\n➡️ https://chatcommerce-bot.onrender.com/menu/pdf?restaurante_id={rid}\n(Haz clic o copia el enlace)",
+                    f" *Menú Digital*\n➡️ https://chatcommerce-bot.onrender.com/menu/pdf?restaurante_id={rid}\n(Copia el enlace)",
                 )
                 return
 
-            # --- 2. DETECCIÓN DE IDIOMA PRECOZ ---
+            # --- DETECCIÓN IDIOMA ---
             detected_lang = detectar_idioma_por_keyword(txt)
             if detected_lang:
                 ctx["fase"] = "lang"
@@ -1000,7 +998,7 @@ async def process_msg(payload: dict):
                 await send_wa(phone, t("welcome", detected_lang, restaurante=rname))
                 return
 
-            # --- 3. FLUJO POR FASE ---
+            # --- FLUJO POR FASE ---
             reply = ""
             fase = ctx["fase"]
             lang_map = {
@@ -1022,21 +1020,508 @@ async def process_msg(payload: dict):
                 "4": "dar",
             }
 
-            # ... (aquí va todo tu flujo de fases: entrega, pago, cash_bill, menu, reservas) ...
-        # Guardar contexto y enviar respuesta
-        if reply:
-            conv.contexto_bot = clean_serializable(ctx)
-            conv.last_message_at = now_utc()
-            try:
-                await db.commit()
-            except Exception as e:
-                logger.error(f"❌ Error commit final: {e}", exc_info=True)
+            # FASES DE PEDIDO
+            if fase == "entrega":
+                if txt == "1":
+                    ctx["pedido_temp"] = {"tipo": "recoger"}
+                    ctx["fase"] = "pago"
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
+                elif txt == "2":
+                    ctx["pedido_temp"] = {"tipo": "domicilio"}
+                    ctx["fase"] = "direccion"
+                    reply = t("address_request", lang)
+                else:
+                    reply = t("delivery_type", lang)
+
+            elif fase == "direccion":
+                if txt in ("1", "recoger", "pick up", "pickup", "recogida"):
+                    ctx["pedido_temp"]["tipo"] = "recoger"
+                    ctx["pedido_temp"].pop("dir", None)
+                    ctx["fase"] = "pago"
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
+                elif validar_zona(txt_raw):
+                    ctx["pedido_temp"]["dir"] = txt_raw.strip()
+                    ctx["fase"] = "pago"
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
+                else:
+                    reply = t("invalid_zone", lang)
+
+            elif fase == "pago":
+                tipo = ctx["pedido_temp"].get("tipo", "recoger")
+                items = ctx.get("carrito", [])
+                if not items:
+                    reply = t("confirm_empty", lang)
+                    ctx["fase"] = "menu"
+                    ctx.pop("pedido_temp", None)
+                elif txt == "1":  # Efectivo
+                    ctx["pedido_temp"]["pago"] = "efectivo"
+                    ctx["fase"] = "cash_bill"
+                    reply = t("cash_bill_request", lang)
+                elif txt == "2":  # Tarjeta
+                    if tipo == "domicilio":
+                        reply = t("card_not_available_for_delivery", lang)
+                    else:
+                        ctx["pedido_temp"]["pago"] = "tarjeta"
+                        total = sum(i["precio"] for i in items)
+                        tiempo = await calc_tiempo(db, rid, tipo, len(items))
+                        ped = Pedido(
+                            id_restaurante=rid,
+                            id_cliente=cli.id_cliente,
+                            items=[
+                                {"nombre": i["nombre"], "precio": i["precio"]}
+                                for i in items
+                            ],
+                            total=Decimal(str(total)),
+                            delivery_type=tipo,
+                            direccion=ctx["pedido_temp"].get("dir"),
+                            metodo_pago="tarjeta",
+                        )
+                        db.add(ped)
+                        await db.flush()
+                        delivery_label = (
+                            t("pickup", lang)
+                            if tipo == "recoger"
+                            else t("delivery", lang)
+                        )
+                        reply = t(
+                            "card_confirm",
+                            lang,
+                            numero=str(ped.id_pedido)[-6:].upper(),
+                            delivery_type=delivery_label,
+                            total=total,
+                            tiempo=tiempo,
+                        )
+                        ctx["carrito"] = []
+                        ctx.pop("pedido_temp", None)
+                        ctx["fase"] = "menu"
+                        conv.contexto_bot = clean_serializable(ctx)
+                        conv.last_message_at = now_utc()
+                        await db.commit()
+                        await event_manager.publish(
+                            "nuevo_pedido",
+                            {
+                                "id": str(ped.id_pedido),
+                                "total": float(total),
+                                "tipo": "tarjeta",
+                                "timestamp": now_utc().isoformat(),
+                            },
+                        )
+                        await guardar_mensaje(
+                            db, conv.id_conversacion, "outbound", reply
+                        )
+                        await send_wa(phone, reply)
+                        return
+                elif txt == "3" and cli.validado:  # Transferencia bancaria
+                    ctx["pedido_temp"]["pago"] = "transferencia"
+                    total = sum(i["precio"] for i in items)
+                    tipo = ctx["pedido_temp"].get("tipo", "recoger")
+                    ped = Pedido(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        items=[
+                            {"nombre": i["nombre"], "precio": i["precio"]}
+                            for i in items
+                        ],
+                        total=Decimal(str(total)),
+                        delivery_type=tipo,
+                        direccion=ctx["pedido_temp"].get("dir"),
+                        metodo_pago="transferencia",
+                        estado=EstadoPedido.pendiente_confirmacion,
+                    )
+                    db.add(ped)
+                    await db.flush()
+                    instrucciones = t(
+                        "bank_transfer_instructions",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                        total=total,
+                    )
+                    await send_wa(phone, instrucciones)
+                    reply = t(
+                        "bank_transfer_pending",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                    )
+                    ctx["carrito"] = []
+                    ctx.pop("pedido_temp", None)
+                    ctx["fase"] = "menu"
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
+                    await event_manager.publish(
+                        "nuevo_pedido_pendiente",
+                        {
+                            "id": str(ped.id_pedido),
+                            "total": float(total),
+                            "tipo": "transferencia",
+                            "timestamp": now_utc().isoformat(),
+                        },
+                    )
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
+                else:
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
+
+            elif fase == "cash_bill":
                 try:
+                    billete = int(txt_raw)
+                    if billete <= 0:
+                        raise ValueError
+                    items = ctx.get("carrito", [])
+                    if not items:
+                        reply = t("confirm_empty", lang)
+                        ctx["fase"] = "menu"
+                        ctx.pop("pedido_temp", None)
+                    else:
+                        total = sum(i["precio"] for i in items)
+                        if billete < total:
+                            reply = f"❌ Insuficiente. Total: {total} MAD. Intenta otro billete."
+                        else:
+                            cambio = billete - total
+                            tipo = ctx["pedido_temp"].get("tipo", "recoger")
+                            tiempo = await calc_tiempo(db, rid, tipo, len(items))
+                            ped = Pedido(
+                                id_restaurante=rid,
+                                id_cliente=cli.id_cliente,
+                                items=[
+                                    {"nombre": i["nombre"], "precio": i["precio"]}
+                                    for i in items
+                                ],
+                                total=Decimal(str(total)),
+                                delivery_type=tipo,
+                                direccion=ctx["pedido_temp"].get("dir"),
+                                metodo_pago="efectivo",
+                            )
+                            db.add(ped)
+                            await db.flush()
+                            delivery_label = (
+                                t("pickup", lang)
+                                if tipo == "recoger"
+                                else t("delivery", lang)
+                            )
+                            reply = t(
+                                "change_calculated",
+                                lang,
+                                cambio=cambio,
+                                numero=str(ped.id_pedido)[-6:].upper(),
+                                delivery_type=delivery_label,
+                                total=total,
+                                tiempo=tiempo,
+                            )
+                            ctx["carrito"] = []
+                            ctx.pop("pedido_temp", None)
+                            ctx["fase"] = "menu"
+                            conv.contexto_bot = clean_serializable(ctx)
+                            conv.last_message_at = now_utc()
+                            await db.commit()
+                            await event_manager.publish(
+                                "nuevo_pedido",
+                                {
+                                    "id": str(ped.id_pedido),
+                                    "total": float(total),
+                                    "tipo": "efectivo",
+                                    "timestamp": now_utc().isoformat(),
+                                },
+                            )
+                            await guardar_mensaje(
+                                db, conv.id_conversacion, "outbound", reply
+                            )
+                            await send_wa(phone, reply)
+                            return
+                except ValueError:
+                    reply = t("cash_bill_request", lang)
+
+            # FLUJO MENÚ
+            elif fase == "menu":
+                if txt in ("v", "pedido", "view", "order"):
+                    cart_text, total = format_cart(ctx.get("carrito", []))
+                    reply = (
+                        t("cart", lang, items=cart_text, total=total)
+                        if cart_text != "🛒 Carrito vacío."
+                        else t("cart_empty", lang)
+                    )
+                elif txt in ("c", "confirm", "confirmar"):
+                    if ctx.get("carrito"):
+                        ctx["fase"] = "entrega"
+                        ctx["pedido_temp"] = {}
+                        reply = t("delivery_type", lang)
+                    else:
+                        reply = t("confirm_empty", lang)
+                elif txt in ("m", "menu", "menú"):
+                    page = ctx.get("menu_page", 1)
+                    menu_items, total_pages = await get_menu_page(db, rid, lang, page)
+                    ctx["current_menu_page_dishes"] = menu_items
+                    reply = t("menu_header", lang, page=page, total_pages=total_pages)
+                    reply += "\n".join(
+                        t("menu_item", lang, **it) for it in menu_items
+                    ) + t("menu_footer", lang)
+                elif txt in ("n", "siguiente", "next", ">", "->"):
+                    page = ctx.get("menu_page", 1)
+                    _, total_pages = await get_menu_page(db, rid, lang, 1)
+                    if page < total_pages:
+                        page += 1
+                        ctx["menu_page"] = page
+                        menu_items, _ = await get_menu_page(db, rid, lang, page)
+                        ctx["current_menu_page_dishes"] = menu_items
+                        reply = (
+                            t("menu_header", lang, page=page, total_pages=total_pages)
+                            + "\n".join(t("menu_item", lang, **it) for it in menu_items)
+                            + t("menu_footer", lang)
+                        )
+                    else:
+                        reply = "📄 Ya estás en la última página."
+                elif txt in ("a", "anterior", "prev", "<", "-<"):
+                    page = ctx.get("menu_page", 1)
+                    if page > 1:
+                        page -= 1
+                        ctx["menu_page"] = page
+                        menu_items, total_pages = await get_menu_page(
+                            db, rid, lang, page
+                        )
+                        ctx["current_menu_page_dishes"] = menu_items
+                        reply = (
+                            t("menu_header", lang, page=page, total_pages=total_pages)
+                            + "\n".join(t("menu_item", lang, **it) for it in menu_items)
+                            + t("menu_footer", lang)
+                        )
+                    else:
+                        reply = "📄 Ya estás en la primera página."
+                elif txt.isdigit():
+                    num = int(txt)
+                    menu_items = ctx.get("current_menu_page_dishes", [])
+                    selected = next(
+                        (item for item in menu_items if item["num"] == num), None
+                    )
+                    if selected:
+                        carrito = list(ctx.get("carrito", []))
+                        carrito.append(
+                            {
+                                "id": str(selected["id_plato"]),
+                                "nombre": selected["nombre"],
+                                "precio": selected["precio"],
+                            }
+                        )
+                        ctx["carrito"] = carrito
+                        total = sum(item["precio"] for item in carrito)
+                        reply = t("added", lang, plato=selected["nombre"], total=total)
+                    else:
+                        reply = t("help", lang)
+                elif " " in txt and txt.split()[0].isdigit() and len(txt.split()) == 2:
+                    parts = txt.split()
+                    cantidad = int(parts[0])
+                    num_plato = int(parts[1])
+                    menu_items = ctx.get("current_menu_page_dishes", [])
+                    selected = next(
+                        (item for item in menu_items if item["num"] == num_plato), None
+                    )
+                    if selected:
+                        carrito = list(ctx.get("carrito", []))
+                        for _ in range(cantidad):
+                            carrito.append(
+                                {
+                                    "id": str(selected["id_plato"]),
+                                    "nombre": selected["nombre"],
+                                    "precio": selected["precio"],
+                                }
+                            )
+                        ctx["carrito"] = carrito
+                        total = sum(item["precio"] for item in carrito)
+                        reply = t("added", lang, plato=selected["nombre"], total=total)
+                    else:
+                        reply = t("help", lang)
+                elif txt.startswith("x "):
+                    parts = txt.split()
+                    if len(parts) == 2 and parts[1].isdigit():
+                        idx = int(parts[1]) - 1
+                        carrito = list(ctx.get("carrito", []))
+                        if 0 <= idx < len(carrito):
+                            removed = carrito.pop(idx)
+                            ctx["carrito"] = carrito
+                            total = sum(i["precio"] for i in carrito)
+                            reply = (
+                                f"❌ Eliminado {removed['nombre']}. Total: {total} MAD"
+                            )
+                        else:
+                            reply = t("help", lang)
+                    else:
+                        reply = t("help", lang)
+                elif txt in ("r", "reservar", "reserve", "book"):
+                    config_res = await db.execute(
+                        select(RestauranteConfig).where(
+                            RestauranteConfig.id_restaurante == rid
+                        )
+                    )
+                    config = config_res.scalar_one_or_none()
+                    if not config or not config.reservation_enabled:
+                        reply = t("res_error_disabled", lang)
+                    else:
+                        ctx["reserva_config"] = {
+                            "max_days": config.max_reservation_days_ahead,
+                            "max_guests": config.max_guests_per_reservation,
+                            "open_time": config.horario_apertura.strftime("%H:%M")
+                            if config.horario_apertura
+                            else "09:00",
+                            "close_time": config.horario_cierre.strftime("%H:%M")
+                            if config.horario_cierre
+                            else "23:00",
+                            "dias_abierto": config.dias_abierto,
+                        }
+                        ctx["fase"] = "res_p"
+                        reply = t("res_personas", lang)
+                else:
+                    reply = t("help", lang)
+
+            # FLUJO RESERVAS
+            elif fase == "lang":
+                new_lang = lang_map.get(txt)
+                if new_lang:
+                    lang = new_lang
+                    ctx["lang"] = lang
+                    ctx["fase"] = "menu"
+                    cli.language_pref = lang
+                    ctx["menu_page"] = 1
+                    ctx["carrito"] = []
+                    ctx["current_menu_page_dishes"] = []
+                    await db.flush()
+                    reply = t("lang_selected", lang, restaurante=rname)
+                else:
+                    reply = t("welcome", lang, restaurante=rname)
+
+            elif fase == "res_p":
+                if txt.isdigit():
+                    ctx["res_personas"] = int(txt)
+                    ctx["fase"] = "res_f"
+                    reply = t("res_fecha", lang)
+                else:
+                    reply = t("res_personas", lang)
+
+            elif fase == "res_f":
+                try:
+                    fecha_obj = datetime.strptime(txt_raw, "%Y-%m-%d").date()
+                    cfg = ctx.get("reserva_config", {})
+                    max_days = cfg.get("max_days", 7)
+                    if fecha_obj > datetime.now(timezone.utc).date() + timedelta(
+                        days=max_days
+                    ):
+                        reply = t("res_error_date_range", lang).replace(
+                            "{max}", str(max_days)
+                        )
+                    else:
+                        ctx["res_fecha"] = txt_raw
+                        ctx["fase"] = "res_h"
+                        reply = t("res_hora", lang)
+                except ValueError:
+                    reply = t("res_fecha", lang)
+
+            elif fase == "res_h":
+                try:
+                    hora_obj = datetime.strptime(txt_raw, "%H:%M").time()
+                    cfg = ctx.get("reserva_config", {})
+                    open_t = datetime.strptime(
+                        cfg.get("open_time", "09:00"), "%H:%M"
+                    ).time()
+                    close_t = datetime.strptime(
+                        cfg.get("close_time", "23:00"), "%H:%M"
+                    ).time()
+                    hoy_weekday = datetime.now(timezone.utc).weekday()
+                    if hoy_weekday not in cfg.get("dias_abierto", list(range(7))):
+                        reply = " Hoy el restaurante está cerrado."
+                    elif not (open_t <= hora_obj <= close_t):
+                        reply = t("res_error_hours", lang)
+                    else:
+                        ctx["res_hora"] = txt_raw
+                        ctx["fase"] = "res_c"
+                        reply = t(
+                            "res_confirm",
+                            lang,
+                            personas=ctx.get("res_personas", 1),
+                            fecha=ctx.get("res_fecha", " "),
+                            hora=txt_raw,
+                        )
+                except ValueError:
+                    reply = t("res_hora", lang)
+
+            elif fase == "res_c":
+                cfg = ctx.get("reserva_config", {})
+                max_guests = cfg.get("max_guests", 10)
+                if ctx.get("res_personas", 1) > max_guests:
+                    reply = t("res_error_capacity", lang, max=max_guests)
+                    ctx["fase"] = "menu"
+                    for k in (
+                        "res_personas",
+                        "res_fecha",
+                        "res_hora",
+                        "reserva_config",
+                    ):
+                        ctx.pop(k, None)
+                elif txt in ("si", "yes", "oui", "نعم"):
+                    codigo = (
+                        f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
+                    )
+                    res = Reservacion(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        codigo_reserva=codigo,
+                        num_personas=ctx["res_personas"],
+                        fecha_reserva=datetime.strptime(
+                            ctx["res_fecha"], "%Y-%m-%d"
+                        ).date(),
+                        hora_reserva=datetime.strptime(ctx["res_hora"], "%H:%M").time(),
+                        estado=EstadoReserva.confirmada,
+                    )
+                    db.add(res)
+                    await db.flush()
+                    reply = t("res_saved", lang, codigo=codigo)
+                    ctx["fase"] = "menu"
+                    for k in (
+                        "res_personas",
+                        "res_fecha",
+                        "res_hora",
+                        "reserva_config",
+                    ):
+                        ctx.pop(k, None)
+                else:
+                    reply = t("res_cancel", lang)
+                    ctx["fase"] = "menu"
+                    for k in (
+                        "res_personas",
+                        "res_fecha",
+                        "res_hora",
+                        "reserva_config",
+                    ):
+                        ctx.pop(k, None)
+            else:
+                ctx["fase"] = "lang"
+                reply = t("welcome", lang, restaurante=rname)
+
+            # Guardar contexto final y enviar respuesta
+            if reply:
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                try:
+                    await db.commit()
+                except Exception as e:
+                    logger.error(f"❌ Error commit final: {e}", exc_info=True)
                     await db.rollback()
-                except Exception:
-                    pass
-            await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
-            await send_wa(phone, reply)
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
 
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
