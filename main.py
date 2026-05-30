@@ -2246,6 +2246,7 @@ async def reservas_hoy_api(
             for r in reservas
         ]
 
+
 # ============================================================
 # PANEL HTML (todas las variables definidas en orden)
 # ============================================================
@@ -2366,58 +2367,175 @@ BROADCAST_HTML = textwrap.dedent("""\
 </html>""")
 
 # 4. Panel principal con pestañas (integra RECEPCION_HTML, METRICAS_HTML, CHATS_HTML)
-PANEL_HTML = textwrap.dedent(f"""\
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.tailwindcss.com"></script><title>Panel ISA</title>
-<style>.tab-btn.active{{background:#C9A84C;color:#0F0F0F;border-color:#C9A84C}}.tab-content{{display:none}}.tab-content.active{{display:block}}</style>
+PANEL_HTML = textwrap.dedent("""\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Panel Restinga v18</title>
+<style>
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }
+.msg-in { align-self: flex-start; background: #374151; }
+.msg-out { align-self: flex-end; background: #B45309; }
+</style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-6xl mx-auto bg-gray-800 rounded shadow-lg overflow-hidden">
+  <nav class="flex border-b border-gray-700 bg-gray-800">
+    <button onclick="switchTab('reservas')" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Reservas</button>
+    <button onclick="switchTab('pedidos')" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">🛒 Pedidos</button>
+    <button onclick="switchTab('chats')" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+  </nav>
+
+  <!-- RESERVAS -->
+  <div id="reservas" class="tab-content active p-4">
+    <h2 class="text-xl font-bold mb-3">📅 Reservas de hoy</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm text-left">
+        <thead class="bg-gray-700"><tr><th class="p-2">Código</th><th class="p-2">Personas</th><th class="p-2">Hora</th><th class="p-2">Estado</th><th class="p-2">Acciones</th></tr></thead>
+        <tbody id="reservas-tb" class="divide-y divide-gray-700"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- PEDIDOS -->
+  <div id="pedidos" class="tab-content p-4">
+    <h2 class="text-xl font-bold mb-3">🛒 Pedidos Activos</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm text-left">
+        <thead class="bg-gray-700"><tr><th class="p-2">ID</th><th class="p-2">Cliente</th><th class="p-2">Total</th><th class="p-2">Tipo</th><th class="p-2">Estado</th><th class="p-2">Hora</th></tr></thead>
+        <tbody id="pedidos-tb" class="divide-y divide-gray-700"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- CHATS -->
+  <div id="chats" class="tab-content p-4 h-[70vh]">
+    <div class="grid grid-cols-3 gap-4 h-full">
+      <div id="chat-list" class="bg-gray-700 rounded p-2 overflow-y-auto"></div>
+      <div class="col-span-2 bg-gray-700 rounded p-4 flex flex-col">
+        <div id="chat-header" class="text-yellow-400 font-bold mb-2 border-b border-gray-600 pb-2">Selecciona una conversación</div>
+        <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 p-2 flex flex-col"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-function showTab(tabId){{
-    document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active','text-yellow-400','border-yellow-400'));
-    document.querySelector(`[data-tab="${{tabId}}"]`).classList.add('active','text-yellow-400','border-yellow-400');
-}}
-function initSSE(){{
-    const es = new EventSource('/api/v1/events');
-    es.addEventListener('nuevo_pedido', () => fetchData());
-    es.addEventListener('nuevo_pedido_pendiente', () => fetchData());
-    es.onerror = () => setTimeout(initSSE, 5000);
-}}
-// Recargar datos cuando se active la pestaña de recepción
-document.addEventListener('DOMContentLoaded', () => {{
-    initSSE();
-    showTab('recepcion');
-    // Asegurar que fetchData esté definida (viene de RECEPCION_HTML)
-    if(typeof fetchData === 'function') fetchData();
-}});
-</script></head>
-<body class="bg-gray-100"><div class="container mx-auto p-4">
-<h1 class="text-3xl font-bold mb-6 text-center">📋 Panel de Control</h1>
-<div class="flex justify-center border-b mb-4">
-    <button data-tab="recepcion" class="tab-btn active px-4 py-2 font-bold">📅 Recepción</button>
-    <button data-tab="metricas" class="tab-btn px-4 py-2 font-bold">📊 Métricas</button>
-    <button data-tab="chats" class="tab-btn px-4 py-2 font-bold">💬 Chats</button>
-    <a href="/panel/menu" class="tab-btn px-4 py-2 font-bold text-gray-600 hover:text-gray-800">🍽️ Menú</a>
-    <a href="/panel/broadcast" class="tab-btn px-4 py-2 font-bold text-gray-600 hover:text-gray-800">📢 Campañas</a>
-    <a href="/panel/logout" class="tab-btn px-4 py-2 font-bold text-red-600 hover:text-red-800">🚪 Salir</a>
-</div>
-<div id="recepcion" class="tab-content active">
-    {RECEPCION_HTML}
-</div>
-<div id="metricas" class="tab-content">
-    {METRICAS_HTML}
-</div>
-<div id="chats" class="tab-content">
-    {CHATS_HTML}
-</div>
-</div>
-</body></html>""")
+let activeConvId = null;
+let chatRefresh = null;
 
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById(tab).classList.add('active');
+  document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+  clearInterval(chatRefresh);
+  if(tab === 'reservas') loadReservas();
+  if(tab === 'pedidos') loadPedidos();
+  if(tab === 'chats') loadChatList();
+}
 
+async function loadReservas() {
+  const tb = document.getElementById('reservas-tb');
+  tb.innerHTML = '<tr><td colspan="5" class="p-4 text-center">Cargando...</td></tr>';
+  try {
+    const res = await fetch('/api/v1/reservaciones/hoy');
+    const data = await res.json();
+    if(!data.length) { tb.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>'; return; }
+    tb.innerHTML = data.map(r => `
+      <tr>
+        <td class="p-2">${r.codigo_reserva}</td>
+        <td class="p-2">${r.num_personas}</td>
+        <td class="p-2">${r.hora_reserva}</td>
+        <td class="p-2"><span class="px-2 py-1 rounded text-xs ${r.estado==='pendiente'?'bg-yellow-600':'bg-green-600'}">${r.estado}</span></td>
+        <td class="p-2 space-x-2">
+          ${r.estado==='pendiente' ? `
+            <button onclick="patchReserva('${r.id}','confirmar')" class="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs">✅</button>
+            <button onclick="patchReserva('${r.id}','cancelar')" class="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs">❌</button>
+          ` : '<span class="text-gray-500 text-xs">Gestionada</span>'}
+        </td>
+      </tr>`).join('');
+  } catch(e) { tb.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-red-400">Error cargando reservas</td></tr>'; }
+}
+
+async function patchReserva(id, acc) {
+  await fetch(`/api/v1/reservaciones/${id}/${acc}`, {method:'PATCH'});
+  loadReservas();
+}
+
+async function loadPedidos() {
+  const tb = document.getElementById('pedidos-tb');
+  tb.innerHTML = '<tr><td colspan="6" class="p-4 text-center">Cargando...</td></tr>';
+  try {
+    const res = await fetch('/api/v1/pedidos/activos');
+    const data = await res.json();
+    if(!data.length) { tb.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>'; return; }
+    tb.innerHTML = data.map(p => `
+      <tr>
+        <td class="p-2">${p.id.slice(0,8)}</td>
+        <td class="p-2">${p.cliente ? p.cliente.slice(0,8)+'...' : '-'}</td>
+        <td class="p-2">${p.total} MAD</td>
+        <td class="p-2">${p.delivery_type || '-'}</td>
+        <td class="p-2"><span class="px-2 py-1 rounded text-xs bg-blue-900">${p.estado}</span></td>
+        <td class="p-2">${new Date(p.created_at).toLocaleTimeString()}</td>
+      </tr>`).join('');
+  } catch(e) { tb.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-red-400">Error cargando pedidos</td></tr>'; }
+}
+
+async function loadChatList() {
+  const container = document.getElementById('chat-list');
+  container.innerHTML = '<div class="p-2 text-gray-400">Cargando...</div>';
+  try {
+    const res = await fetch('/api/v1/conversaciones');
+    const list = await res.json();
+    if(!list.length) { container.innerHTML = '<div class="p-2 text-gray-400 text-center">Sin conversaciones</div>'; return; }
+    container.innerHTML = list.map(c => `
+      <div onclick="openChat('${c.id}', '${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-1 transition ${c.id===activeConvId?'bg-gray-600':''}">
+        <div class="font-bold text-sm">📱 ${c.wa_id}</div>
+        <div class="text-xs text-gray-400">Fase: ${c.fase} | ${new Date(c.last_message_at).toLocaleTimeString()}</div>
+      </div>`).join('');
+  } catch(e) { container.innerHTML = '<div class="p-2 text-red-400">Error</div>'; }
+}
+
+async function openChat(id, wa) {
+  activeConvId = id;
+  document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
+  await loadMessages(id);
+  clearInterval(chatRefresh);
+  chatRefresh = setInterval(() => loadMessages(id), 5000);
+}
+
+async function loadMessages(id) {
+  const container = document.getElementById('chat-messages');
+  try {
+    const res = await fetch(`/api/v1/conversaciones/${id}/mensajes`);
+    const msgs = await res.json();
+    container.innerHTML = msgs.map(m => `
+      <div class="flex ${m.direccion==='inbound'?'msg-in':'msg-out'} max-w-[80%] p-2 rounded-lg text-sm">
+        ${m.contenido || '<i>[Vacío]</i>'}
+        <div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div>
+      </div>`).join('');
+    container.scrollTop = container.scrollHeight;
+  } catch(e) { container.innerHTML = '<div class="text-red-400">Error cargando mensajes</div>'; }
+}
+
+// Cargar pestaña activa al inicio
+document.addEventListener('DOMContentLoaded', () => {
+  loadReservas();
+  setInterval(loadPedidos, 10000);
+  setInterval(loadReservas, 10000);
+});
+</script>
+</body>
+</html>""")
 # ============================================================
 # RUTAS DEL PANEL
 # ============================================================
-
 
 
 @app.get("/panel/menu")
