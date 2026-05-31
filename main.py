@@ -984,15 +984,20 @@ async def sse_events(
 # ============================================================
 # BOT: PROCESAMIENTO DE MENSAJES
 # ============================================================
+
+
 async def process_msg(payload: dict):
     if not async_session_maker:
         return
     try:
-        entry = payload["entry"][0]
-        val = entry["changes"][0]["value"]
-        msg = val.get("messages", [{}])[0]
-        if not msg or msg.get("type") != "text":
+        entry = payload.get("entry", [{}])[0]  # ✅ Usa .get() con valor por defecto
+        val = entry.get("changes", [{}])[0].get("value", {})  # ✅ Evita KeyError
+        msg = val.get("messages", [{}])[0]  # ⚠️ Aún podría fallar si la lista está vacía
+        if not msg:
             return
+    except (KeyError, IndexError) as e:
+        logger.error(f"Error al procesar payload: {e}")
+        return
         phone = msg["from"]
         txt_raw = msg["text"]["body"].strip()
         txt = txt_raw.lower()
@@ -1549,96 +1554,82 @@ async def process_msg(payload: dict):
                 if ctx.get("res_personas", 1) > max_guests:
                     reply = t("res_error_capacity", lang, max=max_guests)
                     ctx["fase"] = "menu"
-                    for k in (
-                        "res_personas",
-                        "res_fecha",
-                        "res_hora",
-                        "reserva_config",
-                    ):
-                        ctx.pop(k, None)
                 elif txt in ("si", "yes", "oui", "نعم"):
                     fecha_str = ctx.get("res_fecha")
                     hora_str = ctx.get("res_hora")
                     personas = ctx.get("res_personas", 1)
-                    zona_pref = ctx.get("zona_preferencia", None)
-                    fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
-                    hora_obj = datetime.strptime(hora_str, "%H:%M").time()
-                    disponibilidad = await verificar_disponibilidad(
-                        db, rid, fecha_obj, hora_obj, personas, zona_pref
+                    try:
+                        fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+                        hora_obj = datetime.strptime(hora_str, "%H:%M").time()
+                    except ValueError:
+                        reply = "❌ Formato de fecha u hora incorrecto. Usa YYYY-MM-DD y HH:MM."
+                        ctx["fase"] = "res_f"
+                        await guardar_mensaje(
+                            db, conv.id_conversacion, "outbound", reply
+                        )
+                        await send_wa(phone, reply)
+                        return  # ✅ Sale de la función
+                    disp = await verificar_disponibilidad(
+                        db, rid, fecha_obj, hora_obj, personas
                     )
-                    if not disponibilidad["disponible"]:
-                        if disponibilidad["alternativas"]:
-                            alt_text = "\n".join(
-                                [
-                                    f"• {a['hora']} ({a['zona']})"
-                                    for a in disponibilidad["alternativas"]
-                                ]
-                            )
-                            reply = f"❌ No tenemos mesa para {personas} a las {hora_str}.\nHoras disponibles:\n{alt_text}\nEscribe la nueva hora (ej. 21:00) o 'cancelar'."
+
+                    if not disp.get("disponible", False):
+                        if disp.get("alternativas"):
+                            reply = f"❌ No hay mesa a las {hora_str}. Opciones: {', '.join(disp['alternativas'])}."
                             ctx["fase"] = "res_h"
-                            ctx["reserva_intentos"] = ctx.get("reserva_intentos", 0) + 1
                         else:
-                            reply = f"❌ Lo sentimos, no hay disponibilidad para {personas} personas en ninguna hora ese día. ¿Quieres probar otro día? (responde 'otro día' o 'cancelar')"
+                            reply = "❌ Sin disponibilidad ese día."
                             ctx["fase"] = "res_f"
+                        await guardar_mensaje(
+                            db, conv.id_conversacion, "outbound", reply
+                        )
+                        await send_wa(phone, reply)
+                        return  # ✅ Sale de la función
+
+                    # Si hay disponibilidad, continua con la lógica de reserva...
+                    codigo = (
+                        f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
+                    )
+                    expira = now_utc() + timedelta(minutes=20)
+                    res = Reservacion(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        codigo_reserva=codigo,
+                        num_personas=personas,
+                        fecha_reserva=fecha_obj,
+                        hora_reserva=hora_obj,
+                        mesa_asignada=disp["mesa"],
+                        zona=disp["zona"],
+                        estado="solicitada",
+                        expira_at=expira,
+                        confirmada_por="ai",
+                    )
+                    db.add(res)
+                    await db.flush()
+                    bloqueado = await bloquear_mesa_temporal(
+                        db,
+                        res.id_reserva,
+                        rid,
+                        fecha_obj,
+                        hora_obj,
+                        disp["mesa"],
+                        disp["zona"],
+                    )
+
+                    if not bloqueado:
+                        await db.rollback()
+                        reply = "❌ Error interno. Inténtalo de nuevo."
+                        ctx["fase"] = "res_h"
                     else:
-                        codigo = (
-                            f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
-                        )
-                        expira = now_utc() + timedelta(minutes=20)
-                        res = Reservacion(
-                            id_restaurante=rid,
-                            id_cliente=cli.id_cliente,
-                            codigo_reserva=codigo,
-                            num_personas=personas,
-                            fecha_reserva=fecha_obj,
-                            hora_reserva=hora_obj,
-                            mesa_asignada=disponibilidad["mesa"],
-                            zona=disponibilidad["zona"],
-                            estado="solicitada",
-                            expira_at=expira,
-                            confirmada_por="ai",
-                        )
-                        db.add(res)
-                        await db.flush()
-                        bloqueado = await bloquear_mesa_temporal(
-                            db,
-                            res.id_reserva,
-                            rid,
-                            fecha_obj,
-                            hora_obj,
-                            disponibilidad["mesa"],
-                            disponibilidad["zona"],
-                        )
-                        if not bloqueado:
-                            await db.rollback()
-                            reply = "❌ Hubo un problema interno. Por favor, intenta de nuevo."
-                            ctx["fase"] = "res_h"
-                        else:
-                            reply = t("res_saved", lang, codigo=codigo)
-                            reply += f"\n⏳ *La mesa {disponibilidad['mesa']} ({disponibilidad['zona']}) está reservada provisionalmente por 20 minutos.*\nNuestro equipo revisará tu solicitud y te confirmará en breve."
-                            ctx["fase"] = "menu"
-                            for k in (
-                                "res_personas",
-                                "res_fecha",
-                                "res_hora",
-                                "reserva_config",
-                                "zona_preferencia",
-                            ):
-                                ctx.pop(k, None)
-                            await db.commit()
+                        reply = t("res_saved", lang, codigo=codigo)
+                        reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                        ctx["fase"] = "menu"
+
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
-                    for k in (
-                        "res_personas",
-                        "res_fecha",
-                        "res_hora",
-                        "reserva_config",
-                    ):
-                        ctx.pop(k, None)
-            else:
-                ctx["fase"] = "lang"
-                reply = t("welcome", lang, restaurante=rname)
+
+            # Guardar contexto y enviar respuesta (fuera del if/elif/else)
             if reply:
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
@@ -1722,40 +1713,94 @@ async def confirmar_reserva(
     if not async_session_maker:
         raise HTTPException(503, "DB offline")
     async with async_session_maker() as db:
-        res = await db.execute(
-            select(Reservacion).where(
-                Reservacion.id_reserva == id,
-                Reservacion.id_restaurante == restaurante_id,
+        reserva = (
+            await db.execute(
+                select(Reservacion).where(
+                    Reservacion.id_reserva == id,
+                    Reservacion.id_restaurante == restaurante_id,
+                )
             )
-        )
-        reserva = res.scalar_one_or_none()
+        ).scalar_one_or_none()
         if not reserva:
-            raise HTTPException(404, "Reserva no encontrada")
-        if reserva.estado not in (EstadoReserva.pendiente, EstadoReserva.solicitada):
-            raise HTTPException(
-                400,
-                f"Solo se puede confirmar una reserva pendiente o solicitada. Estado actual: {reserva.estado}",
-            )
+            raise HTTPException(404, "No encontrada")
+
         if reserva.estado == EstadoReserva.solicitada:
             if reserva.expira_at and reserva.expira_at < now_utc():
                 await liberar_mesa(db, reserva.id_reserva)
                 await db.execute(
                     update(Reservacion)
-                    .where(Reservacion.id_reserva == reserva.id_reserva)
-                    .values(
-                        estado="expirada", mesa_asignada=None, zona=None, expira_at=None
-                    )
+                    .where(Reservacion.id_reserva == id)
+                    .values(estado="expirada", mesa_asignada=None, zona=None)
                 )
-                await db.commit()
-                raise HTTPException(
-                    410, "La solicitud expiró. El cliente debe reintentar."
+                raise HTTPException(410, "Expirada")
+            await db.execute(
+                update(Reservacion)
+                .where(Reservacion.id_reserva == id)
+                .values(
+                    estado=EstadoReserva.confirmada,
+                    confirmada_por="recepcionista",
+                    expira_at=None,
                 )
-            await confirmar_mesa_definitiva(db, reserva.id_reserva)
-        reserva.estado = EstadoReserva.confirmada
-        reserva.confirmada_por = "recepcionista"
-        reserva.expira_at = None
+            )
+            await confirmar_mesa_definitiva(db, id)
+        else:
+            if reserva.estado != EstadoReserva.pendiente:
+                raise HTTPException(400, "Solo se confirman pendientes o solicitadas")
+            reserva.estado = EstadoReserva.confirmada
+
         await db.commit()
-        return {"status": "ok", "nuevo_estado": reserva.estado.value}
+        # Notificar cliente
+        try:
+            cliente = (
+                await db.execute(
+                    select(Cliente).where(Cliente.id_cliente == reserva.id_cliente)
+                )
+            ).scalar_one()
+            await send_wa(
+                cliente.wa_id,
+                f"✅ *Reserva Confirmada*\n📅 {reserva.fecha_reserva} a las {reserva.hora_reserva}\n🪑 Mesa {reserva.mesa_asignada} ({reserva.zona})\n🔢 Código: {reserva.codigo_reserva}",
+            )
+        except Exception:
+            pass
+        return {"status": "ok"}
+
+
+@app.patch("/api/v1/reservaciones/{id}/rechazar")
+async def rechazar_reserva(
+    id: uuid.UUID, restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional)
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        reserva = (
+            await db.execute(
+                select(Reservacion).where(
+                    Reservacion.id_reserva == id,
+                    Reservacion.id_restaurante == restaurante_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not reserva:
+            raise HTTPException(404, "No encontrada")
+        await liberar_mesa(db, id)
+        await db.execute(
+            update(Reservacion)
+            .where(Reservacion.id_reserva == id)
+            .values(estado=EstadoReserva.rechazada, mesa_asignada=None, zona=None)
+        )
+        await db.commit()
+        try:
+            cliente = (
+                await db.execute(
+                    select(Cliente).where(Cliente.id_cliente == reserva.id_cliente)
+                )
+            ).scalar_one()
+            await send_wa(
+                cliente.wa_id, "❌ Reserva rechazada. Por favor intenta otra hora."
+            )
+        except Exception:
+            pass
+        return {"status": "rechazada"}
 
 
 @app.patch("/api/v1/reservaciones/{id}/cancelar")
@@ -2464,108 +2509,85 @@ PANEL_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
-<title>Panel ISA - Restinga</title>
-<style>
-.tab-content { display: none; }
-.tab-content.active { display: block; }
-.tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }
-</style>
+<title>Panel ISA</title>
+<style>.tab-content { display: none; } .tab-content.active { display: block; } .tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }</style>
 <script>
 function showTab(tabId) {
-document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-document.getElementById(tabId).classList.add('active');
-document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
-if(tabId === 'recepcion') loadRecepcion();
-if(tabId === 'metricas') loadMetricas();
-if(tabId === 'chats') loadChatList();
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+  if(tabId==='recepcion') loadRecepcion();
+  if(tabId==='metricas') loadMetricas();
+  if(tabId==='chats') loadChatList();
 }
 async function loadRecepcion() {
-try {
-const [r, p] = await Promise.all([
-fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
-fetch('/api/v1/pedidos/activos').then(r => r.json())
-]);
-const tbRes = document.getElementById('reservas-tb');
-tbRes.innerHTML = r.length ? r.map(x => `<tr><td class="p-2">${x.codigo_reserva}</td><td class="p-2">${x.num_personas}</td><td class="p-2">${x.hora_reserva}</td><td class="p-2"><span class="px-2 py-1 rounded text-xs ${x.estado=='pendiente'||x.estado=='solicitada'?'bg-yellow-600':'bg-green-600'} text-black">${x.estado}</span></td><td class="p-2">${x.estado=='pendiente'||x.estado=='solicitada'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button>`:'-'}</td></tr>`).join('') : '<tr><td colspan="5" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
-const tbPed = document.getElementById('pedidos-tb');
-tbPed.innerHTML = p.length ? p.map(x => `<tr><td class="p-2">${x.id.slice(0,8)}</td><td class="p-2">${x.total} MAD</td><td class="p-2">${x.delivery_type||'-'}</td><td class="p-2"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td></tr>`).join('') : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
-} catch(e) { console.error('Error recepción:', e); }
+  try {
+    const [r, p] = await Promise.all([
+      fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
+      fetch('/api/v1/pedidos/activos').then(r => r.json())
+    ]);
+    document.getElementById('reservas-tb').innerHTML = r.length
+      ? r.map(x => `<tr><td class="p-2 border border-gray-600">${x.codigo_reserva}</td><td class="p-2 border border-gray-600">${x.num_personas}</td><td class="p-2 border border-gray-600">${x.hora_reserva}</td><td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td><td class="p-2 border border-gray-600">${x.estado=='solicitada'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button><button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>`:'-'}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
+
+    document.getElementById('pedidos-tb').innerHTML = p.length
+      ? p.map(x => `<tr><td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td><td class="p-2 border border-gray-600">${x.total} MAD</td><td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td></tr>`).join('')
+      : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
+  } catch(e) { console.error('Error carga recepción:', e); }
 }
 async function confirmarReserva(id) {
-if(!confirm('¿Confirmar esta reserva?')) return;
-try {
-const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, { method: 'PATCH' });
-if(res.ok) { alert('✅ Reserva confirmada'); loadRecepcion(); }
-else { const err = await res.json().catch(() => 'Error desconocido'); alert(`❌ Error: ${err.detail || res.statusText}`); }
-} catch(e) { alert('❌ Error de red o servidor'); }
+  if(!confirm('¿Confirmar reserva?')) return;
+  const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, {method:'PATCH'});
+  if(res.ok) { alert('✅ Confirmada'); loadRecepcion(); } else { alert('❌ Error'); }
+}
+async function rechazarReserva(id) {
+  if(!confirm('¿Rechazar reserva?')) return;
+  const res = await fetch(`/api/v1/reservaciones/${id}/rechazar`, {method:'PATCH'});
+  if(res.ok) { alert('❌ Rechazada'); loadRecepcion(); } else { alert(' Error'); }
 }
 async function loadMetricas() {
-try {
-const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
-document.getElementById('metricas-data').innerHTML = `<div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p class="text-gray-400">Ingresos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p class="text-gray-400">Pedidos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p class="text-gray-400">Reservas hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-purple-400">${d.clientes_nuevos_30d}</h3><p class="text-gray-400">Clientes nuevos (30d)</p></div>`;
-} catch(e) { console.error('Error métricas:', e); }
+  try {
+    const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
+    document.getElementById('metricas-data').innerHTML = `<div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p>Ingresos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p>Pedidos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p>Reservas hoy</p></div>`;
+  } catch(e) {}
 }
 async function loadChatList() {
-try {
-const list = await fetch('/api/v1/conversaciones').then(r => r.json());
-const container = document.getElementById('chat-list');
-container.innerHTML = list.length ? list.map(c => `<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase} | ${new Date(c.last_message_at).toLocaleTimeString()}</div></div>`).join('') : '<div class="text-gray-400 text-center py-4">Sin conversaciones</div>';
-} catch(e) { console.error('Error chats:', e); }
+  try {
+    const list = await fetch('/api/v1/conversaciones').then(r => r.json());
+    document.getElementById('chat-list').innerHTML = list.length ? list.map(c => `<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase}</div></div>`).join('') : '<div class="text-gray-400 text-center py-4">Sin chats</div>';
+  } catch(e) {}
 }
 async function openChat(id, wa) {
-document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
-try {
-const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
-const container = document.getElementById('chat-messages');
-container.innerHTML = msgs.map(m => `<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido || '<i class="text-gray-300">[Sin contenido]</i>'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');
-container.scrollTop = container.scrollHeight;
-} catch(e) { console.error('Error mensajes:', e); }
+  document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
+  try {
+    const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
+    document.getElementById('chat-messages').innerHTML = msgs.map(m => `<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Sin contenido]'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');
+  } catch(e) {}
 }
-document.addEventListener('DOMContentLoaded', () => {
-loadRecepcion(); loadChatList();
-setInterval(() => { if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000);
-});
+document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatList(); setInterval(()=>{ if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000); });
 </script>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen p-4">
 <div class="max-w-7xl mx-auto bg-gray-800 rounded-lg shadow-xl overflow-hidden">
-<nav class="flex border-b border-gray-700">
-<button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
-<button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
-<button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
-<button data-tab="campanas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📢 Campañas</button>
-<a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto">🚪 Salir</a>
-</nav>
-<div id="recepcion" class="tab-content active p-6">
-<h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
-<table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
-<h2 class="text-xl font-bold mb-4 mt-8">🛒 Pedidos Activos</h2>
-<table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
+  <nav class="flex border-b border-gray-700">
+    <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
+    <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
+    <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+    <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto"> Salir</a>
+  </nav>
+  <div id="recepcion" class="tab-content active p-6">
+    <h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
+    <h2 class="text-xl font-bold mb-4 mt-8"> Pedidos Activos</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
+  </div>
+  <div id="metricas" class="tab-content p-6"><h2 class="text-xl font-bold mb-4">📊 Dashboard</h2><div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div></div>
+  <div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
 </div>
-<div id="metricas" class="tab-content p-6">
-<h2 class="text-xl font-bold mb-4">📊 Dashboard del día</h2>
-<div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div>
-</div>
-<div id="chats" class="tab-content p-6 h-[75vh]">
-<div class="grid grid-cols-3 gap-4 h-full">
-<div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div>
-<div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col">
-<div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona una conversación</div>
-<div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div>
-</div>
-</div>
-</div>
-<div id="campanas" class="tab-content p-6">
-<h2 class="text-xl font-bold mb-4"> Envío Masivo</h2>
-<p class="text-gray-400">Usa el endpoint <code>POST /api/v1/broadcast</code> con tu API Key o integra el formulario aquí.</p>
-</div>
-</div>
-</body>
-</html>""")
+</body></html>""")
 
 
 # ============================================================
