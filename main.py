@@ -990,14 +990,16 @@ async def process_msg(payload: dict):
     if not async_session_maker:
         return
     try:
-        entry = payload.get("entry", [{}])[0]  # ✅ Usa .get() con valor por defecto
-        val = entry.get("changes", [{}])[0].get("value", {})  # ✅ Evita KeyError
-        msg = val.get("messages", [{}])[0]  # ⚠️ Aún podría fallar si la lista está vacía
+        entry = payload.get("entry", [{}])[0]
+        val = entry.get("changes", [{}])[0].get("value", {})
+        msg = val.get("messages", [{}])[0]
         if not msg:
             return
     except (KeyError, IndexError) as e:
         logger.error(f"Error al procesar payload: {e}")
         return
+    # Nuevo try que abarca toda la lógica del bot
+    try:
         phone = msg["from"]
         txt_raw = msg["text"]["body"].strip()
         txt = txt_raw.lower()
@@ -1624,22 +1626,20 @@ async def process_msg(payload: dict):
                         reply = t("res_saved", lang, codigo=codigo)
                         reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
                         ctx["fase"] = "menu"
-
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
-
-            # Guardar contexto y enviar respuesta (fuera del if/elif/else)
             if reply:
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
                 try:
                     await db.commit()
-                except Exception as e:
-                    logger.error(f"❌ Error commit final: {e}", exc_info=True)
+                except Exception as e_inner:
+                    logger.error(f"❌ Error commit final: {e_inner}", exc_info=True)
                     await db.rollback()
                 await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
                 await send_wa(phone, reply)
+
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
