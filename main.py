@@ -2445,7 +2445,41 @@ async def reservas_hoy_api(
             for r in reservas
         ]
 
-
+@app.get("/api/v1/reservaciones/pendientes")
+async def reservas_pendientes(
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        today = datetime.now(timezone.utc).date()
+        # Devuelve:
+        # - Todas las solicitudes (estado 'solicitada') para cualquier fecha futura o pasada (pero normalmente futura)
+        # - Las reservas confirmadas de hoy (para que el recepcionista sepa quién viene hoy)
+        res = await db.execute(
+            select(Reservacion)
+            .where(
+                Reservacion.id_restaurante == restaurante_id,
+                (Reservacion.estado == EstadoReserva.solicitada)
+                | ((Reservacion.estado == EstadoReserva.confirmada) & (Reservacion.fecha_reserva == today))
+            )
+            .order_by(Reservacion.fecha_reserva, Reservacion.hora_reserva)
+        )
+        reservas = res.scalars().all()
+        return [
+            {
+                "id": str(r.id_reserva),
+                "codigo_reserva": r.codigo_reserva,
+                "num_personas": r.num_personas,
+                "fecha_reserva": r.fecha_reserva.isoformat(),
+                "hora_reserva": r.hora_reserva.strftime("%H:%M"),
+                "mesa_asignada": r.mesa_asignada,
+                "zona": r.zona,
+                "estado": r.estado.value,
+                "expira_at": r.expira_at.isoformat() if r.expira_at else None,
+            }
+            for r in reservas
+        ]
 # ============================================================
 # VARIABLES HTML
 # ============================================================
