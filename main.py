@@ -1514,9 +1514,8 @@ async def process_msg(payload: dict):
                     if fecha_obj > datetime.now(timezone.utc).date() + timedelta(
                         days=max_days
                     ):
-                        reply = t("res_error_date_range", lang).replace(
-                            "{max}", str(max_days)
-                        )
+                        reply = t("res_error_date_range", lang, max=max_days)
+                        ctx["fase"] = "res_f"
                     else:
                         ctx["res_fecha"] = txt_raw
                         ctx["fase"] = "res_h"
@@ -1576,7 +1575,12 @@ async def process_msg(payload: dict):
                     )
                     if not disp.get("disponible", False):
                         if disp.get("alternativas"):
-                            alt_text = ", ".join([f"{a['hora']} (mesa {a['mesa']})" for a in disp['alternativas']])
+                            alt_text = ", ".join(
+                                [
+                                    f"{a['hora']} (mesa {a['mesa']})"
+                                    for a in disp["alternativas"]
+                                ]
+                            )
                             reply = f"❌ No hay mesa a las {hora_str}. Opciones: {alt_text}."
                             ctx["fase"] = "res_h"
                         else:
@@ -2445,6 +2449,7 @@ async def reservas_hoy_api(
             for r in reservas
         ]
 
+
 @app.get("/api/v1/reservaciones/pendientes")
 async def reservas_pendientes(
     restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
@@ -2461,7 +2466,10 @@ async def reservas_pendientes(
             .where(
                 Reservacion.id_restaurante == restaurante_id,
                 (Reservacion.estado == EstadoReserva.solicitada)
-                | ((Reservacion.estado == EstadoReserva.confirmada) & (Reservacion.fecha_reserva == today))
+                | (
+                    (Reservacion.estado == EstadoReserva.confirmada)
+                    & (Reservacion.fecha_reserva == today)
+                ),
             )
             .order_by(Reservacion.fecha_reserva, Reservacion.hora_reserva)
         )
@@ -2480,6 +2488,8 @@ async def reservas_pendientes(
             }
             for r in reservas
         ]
+
+
 # ============================================================
 # VARIABLES HTML
 # ============================================================
@@ -2654,6 +2664,7 @@ document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatL
   <div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
 </div>
 </body></html>""")
+
 
 # ============================================================
 # RUTAS DEL PANEL
