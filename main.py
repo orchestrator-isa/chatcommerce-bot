@@ -1574,10 +1574,10 @@ async def process_msg(payload: dict):
                     disp = await verificar_disponibilidad(
                         db, rid, fecha_obj, hora_obj, personas
                     )
-
                     if not disp.get("disponible", False):
                         if disp.get("alternativas"):
-                            reply = f"❌ No hay mesa a las {hora_str}. Opciones: {', '.join(disp['alternativas'])}."
+                            alt_text = ", ".join([f"{a['hora']} (mesa {a['mesa']})" for a in disp['alternativas']])
+                            reply = f"❌ No hay mesa a las {hora_str}. Opciones: {alt_text}."
                             ctx["fase"] = "res_h"
                         else:
                             reply = "❌ Sin disponibilidad ese día."
