@@ -3,7 +3,7 @@
 """
 ORQUESTRATOR ISA v19.0 - FLUJO DE PEDIDO COMPLETO + DISPONIBILIDAD ATÓMICA
 v19.0: Reservas con disponibilidad real (calendario_slots), estado 'solicitada' con TTL,
-panel unificado, traducciones completas, flujo de pago optimizado.
+       panel unificado, traducciones completas, flujo de pago optimizado.
 """
 
 import os
@@ -72,11 +72,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("orquestrator_bot")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", " ").strip()
 PANEL_SECRET = os.getenv("PANEL_SESSION_SECRET", "fallback_secret_2026").strip()
 WEBHOOK_VERIFY = os.getenv("VERIFY_TOKEN", "isa_verify_2026").strip()
-WA_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
-WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", "").strip()
+WA_TOKEN = os.getenv("WHATSAPP_TOKEN", " ").strip()
+WA_PHONE_ID = os.getenv("PHONE_NUMBER_ID", " ").strip()
 
 if not DATABASE_URL:
     logger.warning("⚠️ DATABASE_URL vacía. Modo DEMO.")
@@ -115,7 +115,7 @@ class EstadoPedido(str, Enum):
 
 class EstadoReserva(str, Enum):
     pendiente = "pendiente"
-    solicitada = "solicitada"  # Nuevo estado
+    solicitada = "solicitada"
     confirmada = "confirmada"
     sentada = "sentada"
     completada = "completada"
@@ -244,7 +244,6 @@ class Pedido(Base):
     )
 
 
-# MODELO NUEVO: Calendario de Mesas
 class CalendarioSlot(Base):
     __tablename__ = "calendario_slots"
     id: Mapped[uuid.UUID] = mapped_column(
@@ -266,7 +265,6 @@ class CalendarioSlot(Base):
     )
 
 
-# MODELO ACTUALIZADO: Reservaciones con campos nuevos
 class Reservacion(Base):
     __tablename__ = "reservaciones"
     id_reserva: Mapped[uuid.UUID] = mapped_column(
@@ -401,7 +399,7 @@ app.add_middleware(SessionMiddleware, secret_key=PANEL_SECRET)
 
 
 # ============================================================
-# HELPERS & FUNCIONES DE DISPONIBILIDAD
+# HELPERS
 # ============================================================
 async def send_wa(phone: str, text: str):
     if not WA_PHONE_ID or not WA_TOKEN:
@@ -503,102 +501,9 @@ async def guardar_mensaje(
         logger.error(f"Error guardando mensaje: {e}")
 
 
-# Funciones de Disponibilidad (Corregidas)
-async def verificar_disponibilidad(
-    db: AsyncSession,
-    restaurante_id: uuid.UUID,
-    fecha: date,
-    hora: time,
-    num_personas: int,
-    zona_preferida: str = None,
-) -> dict:
-    query = select(CalendarioSlot).where(
-        CalendarioSlot.restaurante_id == restaurante_id,
-        CalendarioSlot.fecha == fecha,
-        CalendarioSlot.hora == hora,
-        not CalendarioSlot.ocupado,  # Corregido: not ocupado
-        CalendarioSlot.capacidad >= num_personas,
-    )
-    if zona_preferida and zona_preferida != "sin_preferencia":
-        query = query.where(CalendarioSlot.zona == zona_preferida)
-
-    query = query.order_by(CalendarioSlot.capacidad.asc()).limit(1)
-    result = await db.execute(query)
-    slot = result.scalar_one_or_none()
-
-    if slot:
-        return {
-            "disponible": True,
-            "mesa": slot.mesa,
-            "zona": slot.zona,
-            "capacidad": slot.capacidad,
-        }
-
-    # Buscar alternativas
-    alt_query = (
-        select(CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona)
-        .where(
-            CalendarioSlot.restaurante_id == restaurante_id,
-            CalendarioSlot.fecha == fecha,
-            not CalendarioSlot.ocupado,
-            CalendarioSlot.capacidad >= num_personas,
-        )
-        .distinct()
-        .order_by(CalendarioSlot.hora)
-        .limit(5)
-    )
-
-    alt_result = await db.execute(alt_query)
-    alternativas = [
-        {"hora": a.hora.strftime("%H:%M"), "mesa": a.mesa, "zona": a.zona}
-        for a in alt_result.all()
-    ]
-    return {"disponible": False, "alternativas": alternativas}
-
-
-async def bloquear_mesa_temporal(
-    db: AsyncSession,
-    reservacion_id: uuid.UUID,
-    restaurante_id: uuid.UUID,
-    fecha: date,
-    hora: time,
-    mesa: str,
-    zona: str,
-) -> bool:
-    stmt = (
-        update(CalendarioSlot)
-        .where(
-            CalendarioSlot.restaurante_id == restaurante_id,
-            CalendarioSlot.fecha == fecha,
-            CalendarioSlot.hora == hora,
-            CalendarioSlot.mesa == mesa,
-            not CalendarioSlot.ocupado,  # Corregido
-        )
-        .values(ocupado=True, reservacion_id=reservacion_id, tipo_bloqueo="temporal")
-    )
-    result = await db.execute(stmt)
-    await db.flush()
-    return result.rowcount > 0
-
-
-async def confirmar_mesa_definitiva(db: AsyncSession, reservacion_id: uuid.UUID):
-    stmt = (
-        update(CalendarioSlot)
-        .where(CalendarioSlot.reservacion_id == reservacion_id)
-        .values(tipo_bloqueo="definitivo")
-    )
-    await db.execute(stmt)
-
-
-async def liberar_mesa(db: AsyncSession, reservacion_id: uuid.UUID):
-    stmt = (
-        update(CalendarioSlot)
-        .where(CalendarioSlot.reservacion_id == reservacion_id)
-        .values(ocupado=False, reservacion_id=None, tipo_bloqueo="definitivo")
-    )
-    await db.execute(stmt)
-
-
+# ============================================================
+# ZONAS Y VALIDACIÓN MEJORADA
+# ============================================================
 ZONA_PERMITIDA = [
     "av. mohamed v",
     "av. mohamed",
@@ -671,6 +576,101 @@ async def calc_tiempo(
 
 
 # ============================================================
+# FUNCIONES DE DISPONIBILIDAD (para reservas)
+# ============================================================
+async def verificar_disponibilidad(
+    db: AsyncSession,
+    restaurante_id: uuid.UUID,
+    fecha: date,
+    hora: time,
+    num_personas: int,
+    zona_preferida: str = None,
+) -> dict:
+    query = select(
+        CalendarioSlot.mesa, CalendarioSlot.zona, CalendarioSlot.capacidad
+    ).where(
+        CalendarioSlot.restaurante_id == restaurante_id,
+        CalendarioSlot.fecha == fecha,
+        CalendarioSlot.hora == hora,
+        CalendarioSlot.ocupado == False,
+        CalendarioSlot.capacidad >= num_personas,
+    )
+    if zona_preferida and zona_preferida != "sin_preferencia":
+        query = query.where(CalendarioSlot.zona == zona_preferida)
+    query = query.order_by(CalendarioSlot.capacidad.asc()).limit(1)
+    result = await db.execute(query)
+    mesa = result.first()
+    if mesa:
+        return {
+            "disponible": True,
+            "mesa": mesa.mesa,
+            "zona": mesa.zona,
+            "capacidad": mesa.capacidad,
+        }
+    alt_query = (
+        select(CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona)
+        .where(
+            CalendarioSlot.restaurante_id == restaurante_id,
+            CalendarioSlot.fecha == fecha,
+            CalendarioSlot.ocupado == False,
+            CalendarioSlot.capacidad >= num_personas,
+        )
+        .distinct()
+        .order_by(CalendarioSlot.hora)
+        .limit(5)
+    )
+    alt_result = await db.execute(alt_query)
+    alternativas = [
+        {"hora": a.hora.strftime("%H:%M"), "mesa": a.mesa, "zona": a.zona}
+        for a in alt_result.all()
+    ]
+    return {"disponible": False, "alternativas": alternativas}
+
+
+async def bloquear_mesa_temporal(
+    db: AsyncSession,
+    reservacion_id: uuid.UUID,
+    restaurante_id: uuid.UUID,
+    fecha: date,
+    hora: time,
+    mesa: str,
+    zona: str,
+) -> bool:
+    stmt = (
+        update(CalendarioSlot)
+        .where(
+            CalendarioSlot.restaurante_id == restaurante_id,
+            CalendarioSlot.fecha == fecha,
+            CalendarioSlot.hora == hora,
+            CalendarioSlot.mesa == mesa,
+            CalendarioSlot.ocupado == False,
+        )
+        .values(ocupado=True, reservacion_id=reservacion_id, tipo_bloqueo="temporal")
+    )
+    result = await db.execute(stmt)
+    await db.flush()
+    return result.rowcount > 0
+
+
+async def confirmar_mesa_definitiva(db: AsyncSession, reservacion_id: uuid.UUID):
+    stmt = (
+        update(CalendarioSlot)
+        .where(CalendarioSlot.reservacion_id == reservacion_id)
+        .values(tipo_bloqueo="definitivo")
+    )
+    await db.execute(stmt)
+
+
+async def liberar_mesa(db: AsyncSession, reservacion_id: uuid.UUID):
+    stmt = (
+        update(CalendarioSlot)
+        .where(CalendarioSlot.reservacion_id == reservacion_id)
+        .values(ocupado=False, reservacion_id=None, tipo_bloqueo="definitivo")
+    )
+    await db.execute(stmt)
+
+
+# ============================================================
 # IDIOMAS Y TRADUCCIONES
 # ============================================================
 IDIOMA_KEYWORDS = {
@@ -692,83 +692,83 @@ def detectar_idioma_por_keyword(txt: str) -> str | None:
 
 I18N = {
     "es": {
-        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma:\n🇪 s → Español\n🇬🇧 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` para descargar el menú",
+        "welcome": "🌍 Bienvenido a {restaurante}\nElige tu idioma:\n🇪🇸 s → Español\n🇬 e → English\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` para descargar el menú",
         "lang_selected": "✅ Idioma guardado: Español\n\n📋 Comandos:\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem\n`r` → Reservar\n`q` → Salir\n\nEscribe `m` para ver el menú.",
         "menu_header": "📋 MENÚ (Página {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
         "menu_footer": "\n`n` → ➡️ Siguiente\n`a` → ⬅️ Anterior\n🛒 Número para añadir\n📄 `menu pdf` para descargar",
         "added": "✅ {plato} añadido. Total: {total} MAD.",
         "cart": "🛒 PEDIDO\n{items}\n💰 Total: {total} MAD",
-        "cart_empty": " Carrito vacío.",
-        "confirm_empty": "⚠️ Carrito vacío.",
+        "cart_empty": "🛒 Carrito vacío.",
+        "confirm_empty": "️ Carrito vacío.",
         "help": "🤔 Comandos:\n`m` → Menú\n`v` → Ver pedido\n`c` → Confirmar\n`x N` → Quitar ítem N\n`r` → Reservar\n`q` → Salir",
         "delivery_type": "🚚 Tipo de entrega\n1. Recoger en local\n2. Domicilio\n\nResponde con el número:",
-        "address_request": "📍 Escribe tu dirección completa:\n(Calle, número, referencia)",
-        "invalid_zone": "❌ Solo enviamos a zonas cercanas (Av. Mohamed V, Plaza Primo...).\nElige `1` (Recoger) o reintenta con otra dirección:",
+        "address_request": " Escribe tu dirección completa:\n(Calle, número, referencia)",
+        "invalid_zone": " Solo enviamos a zonas cercanas (Av. Mohamed V, Plaza Primo...).\nElige `1` (Recoger) o reintenta con otra dirección:",
         "payment_method": "💳 Método de pago\n1. Efectivo\n2. Tarjeta (solo recoger)\n\nResponde con el número:",
         "payment_method_with_bank": "💳 Método de pago\n1. Efectivo\n2. Tarjeta (solo recoger)\n3. Transferencia bancaria\n\nResponde con el número:",
         "cash_bill_request": "💰 Pago en efectivo\n¿Con qué billete pagas? (ej: 50, 100, 200)",
-        "change_calculated": " Cambio: {cambio} MAD.\n\n✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Efectivo\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
-        "card_confirm": "✅ Pedido #{numero}\n {delivery_type}\n💳 Tarjeta\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
-        "card_not_available_for_delivery": " Tarjeta solo disponible en local. Elige `1` (Efectivo).",
+        "change_calculated": "💶 Cambio: {cambio} MAD.\n\n✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Efectivo\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
+        "card_confirm": "✅ Pedido #{numero}\n🚚 {delivery_type}\n💳 Tarjeta\n💰 Total: {total} MAD\n⏱️ {tiempo}\nGracias 🙏",
+        "card_not_available_for_delivery": "❌ Tarjeta solo disponible en local. Elige `1` (Efectivo).",
         "bank_transfer_instructions": "🏦 Transferencia bancaria\nRealiza el pago a la siguiente cuenta:\n\nBanco: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcepto: PEDIDO #{numero}\nImporte: {total} MAD\n\nEnvía el comprobante por este chat. Tu pedido se confirmará manualmente.\n\nGracias.",
         "bank_transfer_pending": "✅ Pedido #{numero} registrado. Pendiente de confirmación de pago.\nTe avisaremos cuando esté confirmado.",
         "bank_transfer_confirmed": "✅ Pago confirmado. Tu pedido #{numero} está en preparación.\n⏱️ {tiempo}\nGracias 🙏",
         "pickup": "Recogida",
         "delivery": "Domicilio",
-        "res_personas": "👥 ¿Cuántas personas? (responde un número)",
+        "res_personas": " ¿Cuántas personas? (responde un número)",
         "res_fecha": "📅 ¿Qué fecha? (YYYY-MM-DD)",
         "res_hora": "🕐 ¿Qué hora? (HH:MM)",
-        "res_confirm": "📋 Reserva\n👥 {personas} personas\n📅 {fecha} 🕐 {hora}\nResponde `si` para confirmar",
+        "res_confirm": " Reserva\n👥 {personas} personas\n📅 {fecha} 🕐 {hora}\nResponde `si` para confirmar",
         "res_saved": "✅ Reserva guardada! Código: {codigo}",
-        "res_cancel": "❌ Reserva cancelada.",
+        "res_cancel": " Reserva cancelada.",
         "res_error_disabled": "❌ Reservas no habilitadas.",
-        "res_error_date_range": " Solo hasta {max} días.",
+        "res_error_date_range": "❌ Solo hasta {max} días.",
         "res_error_hours": "❌ Cerrado en ese horario.",
         "res_error_capacity": "❌ Máximo {max} personas.",
     },
     "en": {
-        "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇧 e → English\n🇫 f → French\n🇲🇦 d → Darija\n\n📄 `menu pdf` for menu PDF",
+        "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n\n📄 `menu pdf` for menu PDF",
         "lang_selected": "✅ Language saved: English\n\n📋 Commands:\n`m` → Menu\n`v` → View\n`c` → Confirm\n`x N` → Remove\n`r` → Book\n`q` → Exit\n\nType `m` to see menu.",
         "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply number to add\n `menu pdf` for PDF",
+        "menu_footer": "\n`n` → ➡️ Next\n`a` → ⬅️ Prev\nReply number to add\n📄 `menu pdf` for PDF",
         "added": "✅ {plato} added. Total: {total} MAD.",
-        "cart": " ORDER\n{items}\n💰 Total: {total} MAD",
+        "cart": "🛒 ORDER\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Cart empty.",
-        "confirm_empty": "⚠️ Cart empty.",
-        "help": "🤔 Commands:\n`m` → Menu\n`v` → View\n`c` → Confirm\n`x N` → Remove item\n`r` → Book\n`q` → Exit",
+        "confirm_empty": "️ Cart empty.",
+        "help": " Commands:\n`m` → Menu\n`v` → View\n`c` → Confirm\n`x N` → Remove item\n`r` → Book\n`q` → Exit",
         "delivery_type": "🚚 Delivery type\n1. Pick up\n2. Home delivery\n\nReply with number:",
         "address_request": "📍 Enter full address:",
-        "invalid_zone": " Delivery only to nearby areas. Choose `1` (Pick up) or retry:",
+        "invalid_zone": "❌ Delivery only to nearby areas. Choose `1` (Pick up) or retry:",
         "payment_method": "💳 Payment\n1. Cash\n2. Card (pick up only)\n\nReply with number:",
         "payment_method_with_bank": "💳 Payment\n1. Cash\n2. Card (pick up only)\n3. Bank transfer\n\nReply with number:",
         "cash_bill_request": "💰 Cash payment\nWhich bill? (e.g., 50, 100, 200)",
-        "change_calculated": "💶 Change: {cambio} MAD.\n\n✅ Order #{numero}\n {delivery_type}\n💳 Cash\n Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
-        "card_confirm": "✅ Order #{numero}\n {delivery_type}\n💳 Card\n💰 Total: {total} MAD\n️ {tiempo}\nThanks 🙏",
+        "change_calculated": "💶 Change: {cambio} MAD.\n\n✅ Order #{numero}\n {delivery_type}\n💳 Cash\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
+        "card_confirm": "✅ Order #{numero}\n {delivery_type}\n💳 Card\n💰 Total: {total} MAD\n⏱️ {tiempo}\nThanks 🙏",
         "card_not_available_for_delivery": "❌ Card only available for pick up. Choose `1` (Cash).",
-        "bank_transfer_instructions": " Bank transfer\nMake the payment to the following account:\n\nBank: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: ORDER #{numero}\nAmount: {total} MAD\n\nSend the proof via this chat. Your order will be manually confirmed.\n\nThanks.",
+        "bank_transfer_instructions": "🏦 Bank transfer\nMake the payment to the following account:\n\nBank: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: ORDER #{numero}\nAmount: {total} MAD\n\nSend the proof via this chat. Your order will be manually confirmed.\n\nThanks.",
         "bank_transfer_pending": "✅ Order #{numero} registered. Waiting for payment confirmation.\nWe will notify you when confirmed.",
         "bank_transfer_confirmed": "✅ Payment confirmed. Your order #{numero} is being prepared.\n⏱️ {tiempo}\nThanks 🙏",
         "pickup": "Pick up",
         "delivery": "Home delivery",
-        "res_personas": " How many people? (reply number)",
+        "res_personas": "👥 How many people? (reply number)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)",
-        "res_hora": " Time? (HH:MM)",
-        "res_confirm": "📋 Reservation\n👥 {personas} people\n📅 {fecha}  {hora}\nReply `yes` to confirm",
+        "res_hora": "🕐 Time? (HH:MM)",
+        "res_confirm": "📋 Reservation\n👥 {personas} people\n📅 {fecha} 🕐 {hora}\nReply `yes` to confirm",
         "res_saved": "✅ Reservation saved! Code: {codigo}",
         "res_cancel": "❌ Reservation cancelled.",
         "res_error_disabled": "❌ Reservations not enabled.",
         "res_error_date_range": "❌ Max {max} days.",
-        "res_error_hours": " Closed at this time.",
+        "res_error_hours": "❌ Closed at this time.",
         "res_error_capacity": "❌ Max {max} guests.",
     },
     "fr": {
-        "welcome": "🌍 Bienvenue à {restaurante}\nChoisissez votre langue:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` pour télécharger le menu",
+        "welcome": "🌍 Bienvenue à {restaurante}\nChoisissez votre langue:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇦 d → Darija\n\n `menu pdf` pour télécharger le menu",
         "lang_selected": "✅ Langue sauvegardée: Français\n\n📋 Commandes:\n`m` → Menu\n`v` → Panier\n`c` → Confirmer\n`r` → Réserver\n`q` → Quitter\n\nTapez `m` pour le menu.",
         "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n`n` → ➡️ Suivant\n`a` → ⬅️ Précédent\n Numéro pour ajouter\n📄 `menu pdf` pour PDF",
+        "menu_footer": "\n`n` → ➡️ Suivant\n`a` → ️ Précédent\n🛒 Numéro pour ajouter\n📄 `menu pdf` pour PDF",
         "added": "✅ {plato} ajouté. Total: {total} MAD.",
         "cart": "🛒 COMMANDE\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Panier vide.",
@@ -780,18 +780,18 @@ I18N = {
         "payment_method": "💳 Mode de paiement\n1. Espèces\n2. Carte (sur place uniquement)\n\nRépondez:",
         "payment_method_with_bank": "💳 Mode de paiement\n1. Espèces\n2. Carte (sur place uniquement)\n3. Virement bancaire\n\nRépondez:",
         "cash_bill_request": "💰 Paiement en espèces\nQuel billet? (ex: 50, 100, 200)",
-        "change_calculated": "💶 Monnaie: {cambio} MAD.\n\n✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Espèces\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
-        "card_confirm": "✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n️ {tiempo}\nMerci 🙏",
-        "card_not_available_for_delivery": " Carte uniquement sur place. Choisissez `1` (Espèces).",
-        "bank_transfer_instructions": " Virement bancaire\nEffectuez le paiement sur le compte suivant:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: COMMANDE #{numero}\nMontant: {total} MAD\n\nEnvoyez la preuve via ce chat. Votre commande sera confirmée manuellement.\n\nMerci.",
+        "change_calculated": "💶 Monnaie: {cambio} MAD.\n\n✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Espèces\n💰 Total: {total} MAD\n️ {tiempo}\nMerci ",
+        "card_confirm": "✅ Commande #{numero}\n🚚 {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_not_available_for_delivery": "❌ Carte uniquement sur place. Choisissez `1` (Espèces).",
+        "bank_transfer_instructions": "🏦 Virement bancaire\nEffectuez le paiement sur le compte suivant:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: COMMANDE #{numero}\nMontant: {total} MAD\n\nEnvoyez la preuve via ce chat. Votre commande sera confirmée manuellement.\n\nMerci.",
         "bank_transfer_pending": "✅ Commande #{numero} enregistrée. En attente de confirmation de paiement.\nNous vous notifierons lorsqu'elle sera confirmée.",
-        "bank_transfer_confirmed": "✅ Paiement confirmé. Votre commande #{numero} est en préparation.\n️ {tiempo}\nMerci 🙏",
+        "bank_transfer_confirmed": "✅ Paiement confirmé. Votre commande #{numero} est en préparation.\n⏱️ {tiempo}\nMerci 🙏",
         "pickup": "À emporter",
         "delivery": "Domicile",
         "res_personas": "👥 Combien de personnes? (répondez un nombre)",
         "res_fecha": "📅 Date? (YYYY-MM-DD)",
-        "res_hora": " Heure? (HH:MM)",
-        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n📅 {fecha} 🕐 {hora}\nRépondez `oui` pour confirmer",
+        "res_hora": "🕐 Heure? (HH:MM)",
+        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n📅 {fecha}  {hora}\nRépondez `oui` pour confirmer",
         "res_saved": "✅ Réservation enregistrée! Code: {codigo}",
         "res_cancel": "❌ Réservation annulée.",
         "res_error_disabled": "❌ Réservations non activées.",
@@ -800,34 +800,34 @@ I18N = {
         "res_error_capacity": " Maximum {max} personnes.",
     },
     "dar": {
-        "welcome": "🌍 Mrahba bik f {restaurante}\nKhtar lougha:\n🇸 s → Espagnol\n🇧 e → Anglais\n🇫🇷 f → Français\n🇲 d → Darija\n\n📄 `menu pdf` bach tchouf lmenu",
+        "welcome": " Mrahba bik f {restaurante}\nKhtar lougha:\n🇪 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` bach tchouf lmenu",
         "lang_selected": "✅ Lougha tssajlat: Darija\n\n📋 Comandos:\n`m` → Menu\n`v` → Panier\n`c` → Confirmi\n`r` → Reservi\n`q` → Ħerreb\n\nKteb `m` bach tchouf lmenu.",
-        "menu_header": " MENU (Page {page}/{total_pages})\n",
+        "menu_header": "📋 MENU (Page {page}/{total_pages})\n",
         "menu_item": "{num}. {nombre} — {precio} MAD",
-        "menu_footer": "\n`n` → ➡️ Mzyan\n`a` → ⬅️ Lwer\n🛒 Raqem bach tzid\n `menu pdf` bach tchouf PDF",
+        "menu_footer": "\n`n` → ➡️ Mzyan\n`a` → ⬅️ Lwer\n🛒 Raqem bach tzid\n📄 `menu pdf` bach tchouf PDF",
         "added": "✅ {plato} tzad. Total: {total} MAD.",
         "cart": "🛒 TALAB\n{items}\n💰 Total: {total} MAD",
         "cart_empty": "🛒 Panier khawi.",
-        "confirm_empty": "️ Panier khawi.",
+        "confirm_empty": "⚠️ Panier khawi.",
         "help": "🤔 Comandos:\n`m` → Menu\n`v` → Chouf\n`c` → Confirmi\n`x N` → Hiyed\n`r` → Reservi\n`q` → Ħerreb",
         "delivery_type": "🚚 Nawa3 d l'livraison\n1. Ħed l'local\n2. Domicile\n\nRépondez b raqem:",
-        "address_request": "📍 Kteb l'adresse kamla:",
+        "address_request": " Kteb l'adresse kamla:",
         "invalid_zone": "❌ Kanţelquw fchi zones (Av. Mohamed V, Plaza Primo...). Khtar `1` (Ħed l'local) aw jawb b adresse okhra:",
         "payment_method": "💳 Tarf d l'paiement\n1. Naqdiya\n2. Carte (ghir f l'local)\n\nRépondez:",
         "payment_method_with_bank": "💳 Tarf d l'paiement\n1. Naqdiya\n2. Carte (ghir f l'local)\n3. Transfert bancaire\n\nRépondez:",
         "cash_bill_request": "💰 Paiement b naqdiya\nB ache flous? (mthal: 50, 100, 200)",
         "change_calculated": "💶 Reste: {cambio} MAD.\n\n✅ Talab #{numero}\n🚚 {delivery_type}\n💳 Naqdiya\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
-        "card_confirm": "✅ Talab #{numero}\n🚚 {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
+        "card_confirm": "✅ Talab #{numero}\n {delivery_type}\n💳 Carte\n💰 Total: {total} MAD\n⏱️ {tiempo}\nMerci 🙏",
         "card_not_available_for_delivery": "❌ Carte ghir f l'local. Khtar `1` (Naqdiya).",
-        "bank_transfer_instructions": " Transfert bancaire\nĦawel l flous f l'compte:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: TALAB #{numero}\nMontant: {total} MAD\n\nBaat l'wassl f had l'chat. Talab ghadi ytettfiq men baad.\n\nMerci.",
+        "bank_transfer_instructions": "🏦 Transfert bancaire\nĦawel l flous f l'compte:\n\nBanque: XXX\nIBAN: ES00 0000 0000 0000 0000 0000\nConcept: TALAB #{numero}\nMontant: {total} MAD\n\nBaat l'wassl f had l'chat. Talab ghadi ytettfiq men baad.\n\nMerci.",
         "bank_transfer_pending": "✅ Talab #{numero} tsejjel. Katstanna tettfiq d l'paiement.\nGhandek n3lmouk.",
         "bank_transfer_confirmed": "✅ Paiement tettfiq. Talab #{numero} tayb.\n⏱️ {tiempo}\nMerci 🙏",
-        "pickup": "ed l'local",
+        "pickup": "Ħed l'local",
         "delivery": "Domicile",
         "res_personas": "👥 Hal ch7al mn personne? (jawb b raqem)",
         "res_fecha": "📅 Anta tarix? (YYYY-MM-DD)",
-        "res_hora": " Anta sa3a? (HH:MM)",
-        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n {fecha} 🕐 {hora}\nJawb `si` bach tettfiq",
+        "res_hora": "🕐 Anta sa3a? (HH:MM)",
+        "res_confirm": "📋 Réservation\n👥 {personas} personnes\n📅 {fecha}  {hora}\nJawb `si` bach tettfiq",
         "res_saved": "✅ Réservation tsejjel! Code: {codigo}",
         "res_cancel": "❌ Réservation tlagt.",
         "res_error_disabled": "❌ Réservations makaynch mfe3lin.",
@@ -982,23 +982,28 @@ async def sse_events(
 
 
 # ============================================================
-# BOT: PROCESAMIENTO DE MENSAJES (CORREGIDO)
+# BOT: PROCESAMIENTO DE MENSAJES
 # ============================================================
+
+
 async def process_msg(payload: dict):
     if not async_session_maker:
         return
     try:
-        entry = payload["entry"][0]
-        val = entry["changes"][0]["value"]
+        entry = payload.get("entry", [{}])[0]
+        val = entry.get("changes", [{}])[0].get("value", {})
         msg = val.get("messages", [{}])[0]
-        if not msg or msg.get("type") != "text":
+        if not msg:
             return
+    except (KeyError, IndexError) as e:
+        logger.error(f"Error al procesar payload: {e}")
+        return
+    # Nuevo try que abarca toda la lógica del bot
+    try:
         phone = msg["from"]
         txt_raw = msg["text"]["body"].strip()
         txt = txt_raw.lower()
-
         async with async_session_maker() as db:
-            # 1. Cliente
             stmt_cli = select(Cliente).where(Cliente.wa_id == phone)
             cli = (await db.execute(stmt_cli)).scalar_one_or_none()
             if not cli:
@@ -1009,6 +1014,7 @@ async def process_msg(payload: dict):
                 )
                 rest = (await db.execute(rest_stmt)).scalar_one_or_none()
                 if not rest:
+                    logger.error("No se encontró el restaurante Restinga")
                     return
                 rid = rest.id_restaurante
                 rname = rest.nombre
@@ -1024,16 +1030,11 @@ async def process_msg(payload: dict):
                 await db.refresh(cli)
             else:
                 rid = cli.id_restaurante
-                rname = (
-                    await db.execute(
-                        select(Restaurante.nombre).where(
-                            Restaurante.id_restaurante == rid
-                        )
-                    )
-                ).scalar_one_or_none() or "Restaurante"
+                rname_res = await db.execute(
+                    select(Restaurante.nombre).where(Restaurante.id_restaurante == rid)
+                )
+                rname = rname_res.scalar_one_or_none() or "Restaurante"
             lang = cli.language_pref
-
-            # 2. Conversación
             stmt_conv = (
                 select(Conversacion)
                 .where(Conversacion.id_cliente == cli.id_cliente)
@@ -1054,35 +1055,38 @@ async def process_msg(payload: dict):
                 db.add(conv)
                 await db.flush()
                 await db.refresh(conv)
-
-            await guardar_mensaje(db, conv.id_conversacion, "inbound", txt_raw)
+            if conv:
+                await guardar_mensaje(db, conv.id_conversacion, "inbound", txt_raw)
             ctx = dict(conv.contexto_bot) if conv.contexto_bot else {}
             ctx.setdefault("fase", "lang")
             ctx.setdefault("carrito", [])
             ctx.setdefault("menu_page", 1)
             ctx.setdefault("current_menu_page_dishes", [])
             ctx.setdefault("pedido_temp", {})
-
-            # RESET / PDF / IDIOMA
+            logger.info(f"FASE: {ctx['fase']} - Msg: '{txt}' - RestID: {rid}")
             if txt in ("q", "salir", "quit"):
-                await db.execute(
-                    update(Conversacion)
-                    .where(Conversacion.id_cliente == cli.id_cliente)
-                    .values(
-                        contexto_bot=clean_serializable(
-                            {
-                                "fase": "lang",
-                                "carrito": [],
-                                "menu_page": 1,
-                                "current_menu_page_dishes": [],
-                                "pedido_temp": {},
-                            }
-                        ),
-                        last_message_at=now_utc(),
+                try:
+                    nuevo_ctx = {
+                        "fase": "lang",
+                        "carrito": [],
+                        "menu_page": 1,
+                        "current_menu_page_dishes": [],
+                        "pedido_temp": {},
+                    }
+                    stmt = (
+                        update(Conversacion)
+                        .where(Conversacion.id_cliente == cli.id_cliente)
+                        .values(
+                            contexto_bot=clean_serializable(nuevo_ctx),
+                            last_message_at=now_utc(),
+                        )
                     )
-                )
-                await db.commit()
-                await send_wa(phone, t("welcome", lang, restaurante=rname))
+                    await db.execute(stmt)
+                    await db.commit()
+                except Exception as e:
+                    logger.error(f"Error en reset: {e}", exc_info=True)
+                    await db.rollback()
+                await send_wa(phone, t("welcome", cli.language_pref, restaurante=rname))
                 return
             if txt == "menu pdf":
                 await send_wa(
@@ -1090,18 +1094,14 @@ async def process_msg(payload: dict):
                     f"📄 *Menú Digital*\n➡️ https://chatcommerce-bot.onrender.com/menu/pdf?restaurante_id={rid}\n(Copia el enlace)",
                 )
                 return
-
             detected_lang = detectar_idioma_por_keyword(txt)
             if detected_lang:
                 ctx["fase"] = "lang"
-                lang = detected_lang
-                cli.language_pref = lang
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
                 await db.commit()
-                await send_wa(phone, t("welcome", lang, restaurante=rname))
+                await send_wa(phone, t("welcome", detected_lang, restaurante=rname))
                 return
-
             reply = ""
             fase = ctx["fase"]
             lang_map = {
@@ -1122,13 +1122,15 @@ async def process_msg(payload: dict):
                 "darija": "dar",
                 "4": "dar",
             }
-
-            # FLUJO
             if fase == "entrega":
                 if txt == "1":
                     ctx["pedido_temp"] = {"tipo": "recoger"}
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
                 elif txt == "2":
                     ctx["pedido_temp"] = {"tipo": "domicilio"}
                     ctx["fase"] = "direccion"
@@ -1136,15 +1138,23 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("delivery_type", lang)
             elif fase == "direccion":
-                if txt in ("1", "recoger"):
+                if txt in ("1", "recoger", "pick up", "pickup", "recogida"):
                     ctx["pedido_temp"]["tipo"] = "recoger"
-                    ctx.pop("dir", None)
+                    ctx["pedido_temp"].pop("dir", None)
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
                 elif validar_zona(txt_raw):
                     ctx["pedido_temp"]["dir"] = txt_raw.strip()
                     ctx["fase"] = "pago"
-                    reply = t("payment_method", lang)
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
                 else:
                     reply = t("invalid_zone", lang)
             elif fase == "pago":
@@ -1162,6 +1172,7 @@ async def process_msg(payload: dict):
                     if tipo == "domicilio":
                         reply = t("card_not_available_for_delivery", lang)
                     else:
+                        ctx["pedido_temp"]["pago"] = "tarjeta"
                         total = sum(i["precio"] for i in items)
                         tiempo = await calc_tiempo(db, rid, tipo, len(items))
                         ped = Pedido(
@@ -1178,15 +1189,18 @@ async def process_msg(payload: dict):
                         )
                         db.add(ped)
                         await db.flush()
+                        delivery_label = (
+                            t("pickup", lang)
+                            if tipo == "recoger"
+                            else t("delivery", lang)
+                        )
                         reply = t(
                             "card_confirm",
                             lang,
                             numero=str(ped.id_pedido)[-6:].upper(),
+                            delivery_type=delivery_label,
                             total=total,
                             tiempo=tiempo,
-                            delivery_type=t("pickup", lang)
-                            if tipo == "recoger"
-                            else t("delivery", lang),
                         )
                         ctx["carrito"] = []
                         ctx.pop("pedido_temp", None)
@@ -1208,8 +1222,61 @@ async def process_msg(payload: dict):
                         )
                         await send_wa(phone, reply)
                         return
+                elif txt == "3" and cli.validado:
+                    ctx["pedido_temp"]["pago"] = "transferencia"
+                    total = sum(i["precio"] for i in items)
+                    tipo = ctx["pedido_temp"].get("tipo", "recoger")
+                    ped = Pedido(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        items=[
+                            {"nombre": i["nombre"], "precio": i["precio"]}
+                            for i in items
+                        ],
+                        total=Decimal(str(total)),
+                        delivery_type=tipo,
+                        direccion=ctx["pedido_temp"].get("dir"),
+                        metodo_pago="transferencia",
+                        estado=EstadoPedido.pendiente_confirmacion,
+                    )
+                    db.add(ped)
+                    await db.flush()
+                    instrucciones = t(
+                        "bank_transfer_instructions",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                        total=total,
+                    )
+                    await send_wa(phone, instrucciones)
+                    reply = t(
+                        "bank_transfer_pending",
+                        lang,
+                        numero=str(ped.id_pedido)[-6:].upper(),
+                    )
+                    ctx["carrito"] = []
+                    ctx.pop("pedido_temp", None)
+                    ctx["fase"] = "menu"
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
+                    await event_manager.publish(
+                        "nuevo_pedido_pendiente",
+                        {
+                            "id": str(ped.id_pedido),
+                            "total": float(total),
+                            "tipo": "transferencia",
+                            "timestamp": now_utc().isoformat(),
+                        },
+                    )
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
                 else:
-                    reply = t("payment_method", lang)
+                    reply = (
+                        t("payment_method_with_bank", lang)
+                        if cli.validado
+                        else t("payment_method", lang)
+                    )
             elif fase == "cash_bill":
                 try:
                     billete = int(txt_raw)
@@ -1223,7 +1290,7 @@ async def process_msg(payload: dict):
                     else:
                         total = sum(i["precio"] for i in items)
                         if billete < total:
-                            reply = f"❌ Insuficiente. Total: {total} MAD."
+                            reply = f"❌ Insuficiente. Total: {total} MAD. Intenta otro billete."
                         else:
                             cambio = billete - total
                             tipo = ctx["pedido_temp"].get("tipo", "recoger")
@@ -1242,16 +1309,19 @@ async def process_msg(payload: dict):
                             )
                             db.add(ped)
                             await db.flush()
+                            delivery_label = (
+                                t("pickup", lang)
+                                if tipo == "recoger"
+                                else t("delivery", lang)
+                            )
                             reply = t(
                                 "change_calculated",
                                 lang,
                                 cambio=cambio,
                                 numero=str(ped.id_pedido)[-6:].upper(),
+                                delivery_type=delivery_label,
                                 total=total,
                                 tiempo=tiempo,
-                                delivery_type=t("pickup", lang)
-                                if tipo == "recoger"
-                                else t("delivery", lang),
                             )
                             ctx["carrito"] = []
                             ctx.pop("pedido_temp", None)
@@ -1276,30 +1346,29 @@ async def process_msg(payload: dict):
                 except ValueError:
                     reply = t("cash_bill_request", lang)
             elif fase == "menu":
-                if txt in ("v", "pedido"):
+                if txt in ("v", "pedido", "view", "order"):
                     cart_text, total = format_cart(ctx.get("carrito", []))
                     reply = (
                         t("cart", lang, items=cart_text, total=total)
-                        if cart_text != " Carrito vacío."
+                        if cart_text != "🛒 Carrito vacío."
                         else t("cart_empty", lang)
                     )
-                elif txt in ("c", "confirm"):
+                elif txt in ("c", "confirm", "confirmar"):
                     if ctx.get("carrito"):
                         ctx["fase"] = "entrega"
                         ctx["pedido_temp"] = {}
                         reply = t("delivery_type", lang)
                     else:
                         reply = t("confirm_empty", lang)
-                elif txt in ("m", "menu"):
+                elif txt in ("m", "menu", "menú"):
                     page = ctx.get("menu_page", 1)
                     menu_items, total_pages = await get_menu_page(db, rid, lang, page)
                     ctx["current_menu_page_dishes"] = menu_items
-                    reply = (
-                        t("menu_header", lang, page=page, total_pages=total_pages)
-                        + "\n".join(t("menu_item", lang, **it) for it in menu_items)
-                        + t("menu_footer", lang)
-                    )
-                elif txt in ("n", "siguiente"):
+                    reply = t("menu_header", lang, page=page, total_pages=total_pages)
+                    reply += "\n".join(
+                        t("menu_item", lang, **it) for it in menu_items
+                    ) + t("menu_footer", lang)
+                elif txt in ("n", "siguiente", "next", ">", "->"):
                     page = ctx.get("menu_page", 1)
                     _, total_pages = await get_menu_page(db, rid, lang, 1)
                     if page < total_pages:
@@ -1307,13 +1376,31 @@ async def process_msg(payload: dict):
                         ctx["menu_page"] = page
                         menu_items, _ = await get_menu_page(db, rid, lang, page)
                         ctx["current_menu_page_dishes"] = menu_items
-                        reply = (
-                            t("menu_header", lang, page=page, total_pages=total_pages)
-                            + "\n".join(t("menu_item", lang, **it) for it in menu_items)
-                            + t("menu_footer", lang)
+                        reply = t(
+                            "menu_header", lang, page=page, total_pages=total_pages
                         )
+                        reply += "\n".join(
+                            t("menu_item", lang, **it) for it in menu_items
+                        ) + t("menu_footer", lang)
                     else:
-                        reply = "📄 Última página."
+                        reply = " Ya estás en la última página."
+                elif txt in ("a", "anterior", "prev", "<", "-<"):
+                    page = ctx.get("menu_page", 1)
+                    if page > 1:
+                        page -= 1
+                        ctx["menu_page"] = page
+                        menu_items, total_pages = await get_menu_page(
+                            db, rid, lang, page
+                        )
+                        ctx["current_menu_page_dishes"] = menu_items
+                        reply = t(
+                            "menu_header", lang, page=page, total_pages=total_pages
+                        )
+                        reply += "\n".join(
+                            t("menu_item", lang, **it) for it in menu_items
+                        ) + t("menu_footer", lang)
+                    else:
+                        reply = "📄 Ya estás en la primera página."
                 elif txt.isdigit():
                     num = int(txt)
                     menu_items = ctx.get("current_menu_page_dishes", [])
@@ -1330,22 +1417,56 @@ async def process_msg(payload: dict):
                             }
                         )
                         ctx["carrito"] = carrito
-                        reply = t(
-                            "added",
-                            lang,
-                            plato=selected["nombre"],
-                            total=sum(item["precio"] for item in carrito),
-                        )
+                        total = sum(item["precio"] for item in carrito)
+                        reply = t("added", lang, plato=selected["nombre"], total=total)
                     else:
                         reply = t("help", lang)
-                elif txt in ("r", "reservar"):
-                    config = (
-                        await db.execute(
-                            select(RestauranteConfig).where(
-                                RestauranteConfig.id_restaurante == rid
+                elif " " in txt and txt.split()[0].isdigit() and len(txt.split()) == 2:
+                    parts = txt.split()
+                    cantidad = int(parts[0])
+                    num_plato = int(parts[1])
+                    menu_items = ctx.get("current_menu_page_dishes", [])
+                    selected = next(
+                        (item for item in menu_items if item["num"] == num_plato), None
+                    )
+                    if selected:
+                        carrito = list(ctx.get("carrito", []))
+                        for _ in range(cantidad):
+                            carrito.append(
+                                {
+                                    "id": str(selected["id_plato"]),
+                                    "nombre": selected["nombre"],
+                                    "precio": selected["precio"],
+                                }
                             )
+                        ctx["carrito"] = carrito
+                        total = sum(item["precio"] for item in carrito)
+                        reply = t("added", lang, plato=selected["nombre"], total=total)
+                    else:
+                        reply = t("help", lang)
+                elif txt.startswith("x "):
+                    parts = txt.split()
+                    if len(parts) == 2 and parts[1].isdigit():
+                        idx = int(parts[1]) - 1
+                        carrito = list(ctx.get("carrito", []))
+                        if 0 <= idx < len(carrito):
+                            removed = carrito.pop(idx)
+                            ctx["carrito"] = carrito
+                            total = sum(i["precio"] for i in carrito)
+                            reply = (
+                                f"❌ Eliminado {removed['nombre']}. Total: {total} MAD"
+                            )
+                        else:
+                            reply = t("help", lang)
+                    else:
+                        reply = t("help", lang)
+                elif txt in ("r", "reservar", "reserve", "book"):
+                    config_res = await db.execute(
+                        select(RestauranteConfig).where(
+                            RestauranteConfig.id_restaurante == rid
                         )
-                    ).scalar_one_or_none()
+                    )
+                    config = config_res.scalar_one_or_none()
                     if not config or not config.reservation_enabled:
                         reply = t("res_error_disabled", lang)
                     else:
@@ -1364,6 +1485,20 @@ async def process_msg(payload: dict):
                         reply = t("res_personas", lang)
                 else:
                     reply = t("help", lang)
+            elif fase == "lang":
+                new_lang = lang_map.get(txt)
+                if new_lang:
+                    lang = new_lang
+                    ctx["lang"] = lang
+                    ctx["fase"] = "menu"
+                    cli.language_pref = lang
+                    ctx["menu_page"] = 1
+                    ctx["carrito"] = []
+                    ctx["current_menu_page_dishes"] = []
+                    await db.flush()
+                    reply = t("lang_selected", lang, restaurante=rname)
+                else:
+                    reply = t("welcome", lang, restaurante=rname)
             elif fase == "res_p":
                 if txt.isdigit():
                     ctx["res_personas"] = int(txt)
@@ -1400,7 +1535,7 @@ async def process_msg(payload: dict):
                     ).time()
                     hoy_weekday = datetime.now(timezone.utc).weekday()
                     if hoy_weekday not in cfg.get("dias_abierto", list(range(7))):
-                        reply = "❌ Cerrado hoy."
+                        reply = " Hoy el restaurante está cerrado."
                     elif not (open_t <= hora_obj <= close_t):
                         reply = t("res_error_hours", lang)
                     else:
@@ -1425,83 +1560,88 @@ async def process_msg(payload: dict):
                     fecha_str = ctx.get("res_fecha")
                     hora_str = ctx.get("res_hora")
                     personas = ctx.get("res_personas", 1)
-                    fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
-                    hora_obj = datetime.strptime(hora_str, "%H:%M").time()
-
-                    #  VERIFICAR DISPONIBILIDAD
+                    try:
+                        fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+                        hora_obj = datetime.strptime(hora_str, "%H:%M").time()
+                    except ValueError:
+                        reply = "❌ Formato de fecha u hora incorrecto. Usa YYYY-MM-DD y HH:MM."
+                        ctx["fase"] = "res_f"
+                        await guardar_mensaje(
+                            db, conv.id_conversacion, "outbound", reply
+                        )
+                        await send_wa(phone, reply)
+                        return  # ✅ Sale de la función
                     disp = await verificar_disponibilidad(
                         db, rid, fecha_obj, hora_obj, personas
                     )
-                    if not disp["disponible"]:
-                        if disp["alternativas"]:
-                            reply = f"❌ No hay mesa a las {hora_str}. Opciones: {', '.join(a['hora'] for a in disp['alternativas'])}."
+
+                    if not disp.get("disponible", False):
+                        if disp.get("alternativas"):
+                            reply = f"❌ No hay mesa a las {hora_str}. Opciones: {', '.join(disp['alternativas'])}."
                             ctx["fase"] = "res_h"
                         else:
                             reply = "❌ Sin disponibilidad ese día."
                             ctx["fase"] = "res_f"
-                    else:
-                        # ✅ Hay mesa -> Crear reserva en estado 'solicitada'
-                        codigo = (
-                            f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
+                        await guardar_mensaje(
+                            db, conv.id_conversacion, "outbound", reply
                         )
-                        expira = now_utc() + timedelta(minutes=20)
-                        res = Reservacion(
-                            id_restaurante=rid,
-                            id_cliente=cli.id_cliente,
-                            codigo_reserva=codigo,
-                            num_personas=personas,
-                            fecha_reserva=fecha_obj,
-                            hora_reserva=hora_obj,
-                            mesa_asignada=disp["mesa"],
-                            zona=disp["zona"],
-                            estado=EstadoReserva.solicitada,
-                            expira_at=expira,
-                            confirmada_por="ai",
-                        )
-                        db.add(res)
-                        await db.flush()
+                        await send_wa(phone, reply)
+                        return  # ✅ Sale de la función
 
-                        # Bloquear la mesa físicamente
-                        bloqueado = await bloquear_mesa_temporal(
-                            db,
-                            res.id_reserva,
-                            rid,
-                            fecha_obj,
-                            hora_obj,
-                            disp["mesa"],
-                            disp["zona"],
-                        )
-                        if not bloqueado:
-                            await db.rollback()
-                            reply = "❌ Error interno."
-                            ctx["fase"] = "res_h"
-                        else:
-                            reply = (
-                                t("res_saved", lang, codigo=codigo)
-                                + f"\n⏳ Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min."
-                            )
-                            ctx["fase"] = "menu"
-                            await db.commit()
+                    # Si hay disponibilidad, continua con la lógica de reserva...
+                    codigo = (
+                        f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
+                    )
+                    expira = now_utc() + timedelta(minutes=20)
+                    res = Reservacion(
+                        id_restaurante=rid,
+                        id_cliente=cli.id_cliente,
+                        codigo_reserva=codigo,
+                        num_personas=personas,
+                        fecha_reserva=fecha_obj,
+                        hora_reserva=hora_obj,
+                        mesa_asignada=disp["mesa"],
+                        zona=disp["zona"],
+                        estado="solicitada",
+                        expira_at=expira,
+                        confirmada_por="ai",
+                    )
+                    db.add(res)
+                    await db.flush()
+                    bloqueado = await bloquear_mesa_temporal(
+                        db,
+                        res.id_reserva,
+                        rid,
+                        fecha_obj,
+                        hora_obj,
+                        disp["mesa"],
+                        disp["zona"],
+                    )
+
+                    if not bloqueado:
+                        await db.rollback()
+                        reply = "❌ Error interno. Inténtalo de nuevo."
+                        ctx["fase"] = "res_h"
+                    else:
+                        reply = t("res_saved", lang, codigo=codigo)
+                        reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                        ctx["fase"] = "menu"
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
-            else:
-                ctx["fase"] = "lang"
-                reply = t("welcome", lang, restaurante=rname)
-
-            # Guardar y enviar
             if reply:
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
                 try:
                     await db.commit()
-                except Exception as e:
-                    logger.error(f"Error commit: {e}", exc_info=True)
+                except Exception as e_inner:
+                    logger.error(f"❌ Error commit final: {e_inner}", exc_info=True)
                     await db.rollback()
                 await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
                 await send_wa(phone, reply)
+
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
+        logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
 
 # ============================================================
@@ -1583,6 +1723,7 @@ async def confirmar_reserva(
         ).scalar_one_or_none()
         if not reserva:
             raise HTTPException(404, "No encontrada")
+
         if reserva.estado == EstadoReserva.solicitada:
             if reserva.expira_at and reserva.expira_at < now_utc():
                 await liberar_mesa(db, reserva.id_reserva)
@@ -1606,7 +1747,9 @@ async def confirmar_reserva(
             if reserva.estado != EstadoReserva.pendiente:
                 raise HTTPException(400, "Solo se confirman pendientes o solicitadas")
             reserva.estado = EstadoReserva.confirmada
+
         await db.commit()
+        # Notificar cliente
         try:
             cliente = (
                 await db.execute(
@@ -1615,9 +1758,9 @@ async def confirmar_reserva(
             ).scalar_one()
             await send_wa(
                 cliente.wa_id,
-                f"✅ *Reserva Confirmada*\n {reserva.fecha_reserva} a las {reserva.hora_reserva}\n🪑 Mesa {reserva.mesa_asignada} ({reserva.zona})\n🔢 Código: {reserva.codigo_reserva}",
+                f"✅ *Reserva Confirmada*\n📅 {reserva.fecha_reserva} a las {reserva.hora_reserva}\n🪑 Mesa {reserva.mesa_asignada} ({reserva.zona})\n🔢 Código: {reserva.codigo_reserva}",
             )
-        except:
+        except Exception:
             pass
         return {"status": "ok"}
 
@@ -1655,7 +1798,7 @@ async def rechazar_reserva(
             await send_wa(
                 cliente.wa_id, "❌ Reserva rechazada. Por favor intenta otra hora."
             )
-        except:
+        except Exception:
             pass
         return {"status": "rechazada"}
 
@@ -2304,129 +2447,164 @@ async def reservas_hoy_api(
 
 
 # ============================================================
-# PANEL HTML (CORREGIDO)
+# VARIABLES HTML
 # ============================================================
 LOGIN_HTML = textwrap.dedent("""\
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.tailwindcss.com"></script><title>ISA Panel - Login</title></head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen">
-<div class="bg-white p-8 rounded shadow-md w-96"><h1 class="text-2xl font-bold mb-6 text-center">🔐 Panel ISA</h1>
-<form action="/panel/login" method="post"><input type="password" name="api_key" placeholder="API Key" class="w-full p-2 border rounded mb-4" required>
-<button type="submit" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Ingresar</button></form></div></body></html>""")
-
-PANEL_HTML = textwrap.dedent("""\
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
-<title>Panel ISA - Restinga</title>
-<style>
-.tab-content { display: none; }
-.tab-content.active { display: block; }
-.tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }
-</style>
+<title>ISA Panel - Login</title>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+<div class="bg-white p-8 rounded shadow-md w-96">
+<h1 class="text-2xl font-bold mb-6 text-center">🔐 Panel ISA</h1>
+<form action="/panel/login" method="post">
+<input type="password" name="api_key" placeholder="API Key" class="w-full p-2 border rounded mb-4" required>
+<button type="submit" class="w-full bg-blue-600 text-white p-2 rounded hover:bg-blue-700">Ingresar</button>
+</form>
+</div>
+</body>
+</html>""")
+
+MENU_HTML = textwrap.dedent("""\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Gestión de Menú - ISA</title>
+</head>
+<body class="bg-gray-100 p-4">
+<div class="container mx-auto">
+<h1 class="text-2xl font-bold mb-4">🍽️ Gestión de Platos</h1>
+<p class="text-gray-600 mb-4">Panel en construcción. Usa la API para gestionar platos.</p>
+<a href="/panel/recepcion" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">← Volver al Panel</a>
+</div>
+</body>
+</html>""")
+
+BROADCAST_HTML = textwrap.dedent("""\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Campañas - ISA</title>
+</head>
+<body class="bg-gray-100 p-4">
+<div class="container mx-auto">
+<h1 class="text-2xl font-bold mb-4">📢 Campañas Masivas</h1>
+<p class="text-gray-600 mb-4">Envía mensajes a grupos de clientes usando la API (<code>POST /api/v1/broadcast</code>).</p>
+<a href="/panel/recepcion" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">← Volver al Panel</a>
+</div>
+</body>
+</html>""")
+
+PANEL_HTML = textwrap.dedent("""\
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Panel ISA</title>
+<style>.tab-content { display: none; } .tab-content.active { display: block; } .tab-btn.active { border-bottom: 2px solid #EAB308; color: #EAB308; }</style>
 <script>
 function showTab(tabId) {
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
-    if(tabId === 'recepcion') loadRecepcion();
-    if(tabId === 'metricas') loadMetricas();
-    if(tabId === 'chats') loadChatList();
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+  if(tabId==='recepcion') loadRecepcion();
+  if(tabId==='metricas') loadMetricas();
+  if(tabId==='chats') loadChatList();
 }
-
 async function loadRecepcion() {
-    try {
-        const [r, p] = await Promise.all([
-            fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
-            fetch('/api/v1/pedidos/activos').then(r => r.json())
-        ]);
-        document.getElementById('reservas-tb').innerHTML = r.length
-        ? r.map(x => `<tr><td class="p-2 border border-gray-600">${x.codigo_reserva}</td><td class="p-2 border border-gray-600">${x.num_personas}</td><td class="p-2 border border-gray-600">${x.hora_reserva}</td><td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td><td class="p-2 border border-gray-600">${x.estado=='solicitada'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button><button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>`:'-'}</td></tr>`).join('')
-        : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
+  try {
+    const [r, p] = await Promise.all([
+      fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
+      fetch('/api/v1/pedidos/activos').then(r => r.json())
+    ]);
+    document.getElementById('reservas-tb').innerHTML = r.length
+      ? r.map(x => `<tr><td class="p-2 border border-gray-600">${x.codigo_reserva}</td><td class="p-2 border border-gray-600">${x.num_personas}</td><td class="p-2 border border-gray-600">${x.hora_reserva}</td><td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td><td class="p-2 border border-gray-600">${x.estado=='solicitada'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button><button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>`:'-'}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
 
-        document.getElementById('pedidos-tb').innerHTML = p.length
-        ? p.map(x => `<tr><td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td><td class="p-2 border border-gray-600">${x.total} MAD</td><td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td></tr>`).join('')
-        : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
-    } catch(e) { console.error('Error carga recepción:', e); }
+    document.getElementById('pedidos-tb').innerHTML = p.length
+      ? p.map(x => `<tr><td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td><td class="p-2 border border-gray-600">${x.total} MAD</td><td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td></tr>`).join('')
+      : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
+  } catch(e) { console.error('Error carga recepción:', e); }
 }
-
 async function confirmarReserva(id) {
-    if(!confirm('¿Confirmar reserva?')) return;
-    const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, {method:'PATCH'});
-    if(res.ok) { alert('✅ Confirmada'); loadRecepcion(); } else { alert('❌ Error'); }
+  if(!confirm('¿Confirmar reserva?')) return;
+  const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, {method:'PATCH'});
+  if(res.ok) { alert('✅ Confirmada'); loadRecepcion(); } else { alert('❌ Error'); }
 }
-
 async function rechazarReserva(id) {
-    if(!confirm('¿Rechazar reserva?')) return;
-    const res = await fetch(`/api/v1/reservaciones/${id}/rechazar`, {method:'PATCH'});
-    if(res.ok) { alert('❌ Rechazada'); loadRecepcion(); } else { alert('Error'); }
+  if(!confirm('¿Rechazar reserva?')) return;
+  const res = await fetch(`/api/v1/reservaciones/${id}/rechazar`, {method:'PATCH'});
+  if(res.ok) { alert('❌ Rechazada'); loadRecepcion(); } else { alert(' Error'); }
 }
-
 async function loadMetricas() {
-    try {
-        const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
-        document.getElementById('metricas-data').innerHTML = `<div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p>Ingresos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p>Pedidos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p>Reservas hoy</p></div>`;
-    } catch(e) {}
+  try {
+    const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
+    document.getElementById('metricas-data').innerHTML = `<div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p>Ingresos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p>Pedidos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p>Reservas hoy</p></div>`;
+  } catch(e) {}
 }
-
 async function loadChatList() {
-    try {
-        const list = await fetch('/api/v1/conversaciones').then(r => r.json());
-        document.getElementById('chat-list').innerHTML = list.length ? list.map(c => `<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase}</div></div>`).join('') : '<div class="text-gray-400 text-center py-4">Sin chats</div>';
-    } catch(e) {}
+  try {
+    const list = await fetch('/api/v1/conversaciones').then(r => r.json());
+    document.getElementById('chat-list').innerHTML = list.length ? list.map(c => `<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase}</div></div>`).join('') : '<div class="text-gray-400 text-center py-4">Sin chats</div>';
+  } catch(e) {}
 }
-
 async function openChat(id, wa) {
-    document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
-    try {
-        const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
-        document.getElementById('chat-messages').innerHTML = msgs.map(m => `<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Sin contenido]'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');
-    } catch(e) {}
+  document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
+  try {
+    const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
+    document.getElementById('chat-messages').innerHTML = msgs.map(m => `<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Sin contenido]'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');
+  } catch(e) {}
 }
-
-document.addEventListener('DOMContentLoaded', () => {
-    loadRecepcion(); loadChatList();
-    setInterval(() => { if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000);
-});
+document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatList(); setInterval(()=>{ if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000); });
 </script>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen p-4">
 <div class="max-w-7xl mx-auto bg-gray-800 rounded-lg shadow-xl overflow-hidden">
-    <nav class="flex border-b border-gray-700">
-        <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
-        <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
-        <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
-        <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto">🚪 Salir</a>
-    </nav>
-
-    <div id="recepcion" class="tab-content active p-6">
-        <h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
-        <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
-        <h2 class="text-xl font-bold mb-4 mt-8"> Pedidos Activos</h2>
-        <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
-    </div>
-
-    <div id="metricas" class="tab-content p-6">
-        <h2 class="text-xl font-bold mb-4">📊 Dashboard del día</h2>
-        <div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div>
-    </div>
-
-    <div id="chats" class="tab-content p-6 h-[75vh]">
-        <div class="grid grid-cols-3 gap-4 h-full">
-            <div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div>
-            <div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col">
-                <div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div>
-                <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div>
-            </div>
-        </div>
-    </div>
+  <nav class="flex border-b border-gray-700">
+    <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
+    <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
+    <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+    <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto"> Salir</a>
+  </nav>
+  <div id="recepcion" class="tab-content active p-6">
+    <h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
+    <h2 class="text-xl font-bold mb-4 mt-8"> Pedidos Activos</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
+  </div>
+  <div id="metricas" class="tab-content p-6"><h2 class="text-xl font-bold mb-4">📊 Dashboard</h2><div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div></div>
+  <div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
 </div>
-</body>
-</html>""")
+</body></html>""")
+
+
+# ============================================================
+# RUTAS DEL PANEL
+# ============================================================
+@app.get("/panel/menu")
+def p_menu(request: Request):
+    if request.session.get("auth") != "ok":
+        return RedirectResponse("/panel/login")
+    return HTMLResponse(content=MENU_HTML)
+
+
+@app.get("/panel/broadcast")
+def p_broadcast(request: Request):
+    if request.session.get("auth") != "ok":
+        return RedirectResponse("/panel/login")
+    return HTMLResponse(content=BROADCAST_HTML)
 
 
 @app.get("/panel/login")
@@ -2441,15 +2619,14 @@ async def p_login_post(request: Request, api_key: str = Form(...)):
             content=LOGIN_HTML + "<p class='text-red-500'>Error de conexión</p>"
         )
     async with async_session_maker() as db:
-        ak = (
-            await db.execute(
-                select(ApiKey).where(
-                    ApiKey.key_value == api_key,
-                    ApiKey.activo.is_(True),
-                    (ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now_utc()),
-                )
+        res = await db.execute(
+            select(ApiKey).where(
+                ApiKey.key_value == api_key,
+                ApiKey.activo.is_(True),
+                (ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now_utc()),
             )
-        ).scalar_one_or_none()
+        )
+        ak = res.scalar_one_or_none()
         if ak:
             request.session["auth"] = "ok"
             request.session["api_key"] = api_key
@@ -2484,7 +2661,11 @@ def p_logout(request: Request):
 # ============================================================
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "19.0", "db": "online" if engine else "offline"}
+    return {
+        "status": "ok",
+        "version": "19.0",
+        "db": "online" if engine else "offline",
+    }
 
 
 @app.get("/api/whatsapp/webhook")
