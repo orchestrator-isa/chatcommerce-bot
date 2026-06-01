@@ -2525,47 +2525,79 @@ function showTab(tabId) {
 }
 async function loadRecepcion() {
   try {
-    const [r, p] = await Promise.all([
-      fetch('/api/v1/reservaciones/hoy').then(r => r.json()),
-      fetch('/api/v1/pedidos/activos').then(r => r.json())
+    const [reservas, pedidos] = await Promise.all([
+      fetch('/api/v1/reservaciones/pendientes', { credentials: 'include' }).then(r => r.json()),
+      fetch('/api/v1/pedidos/activos', { credentials: 'include' }).then(r => r.json())
     ]);
-    document.getElementById('reservas-tb').innerHTML = r.length
-      ? r.map(x => `<tr><td class="p-2 border border-gray-600">${x.codigo_reserva}</td><td class="p-2 border border-gray-600">${x.num_personas}</td><td class="p-2 border border-gray-600">${x.hora_reserva}</td><td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td><td class="p-2 border border-gray-600">${x.estado=='solicitada'?`<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button><button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>`:'-'}</td></tr>`).join('')
-      : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas hoy</td></tr>';
+    document.getElementById('reservas-tb').innerHTML = reservas.length
+      ? reservas.map(x => `
+        <tr>
+          <td class="p-2 border border-gray-600">${x.codigo_reserva}</td>
+          <td class="p-2 border border-gray-600">${x.num_personas}</td>
+          <td class="p-2 border border-gray-600">${x.fecha_reserva} ${x.hora_reserva}</td>
+          <td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td>
+          <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td>
+          <td class="p-2 border border-gray-600">${x.estado=='solicitada' ? `<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button>
+          <button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>` : '-'}</td>
+        </table>
+      `).join('')
+      : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas pendientes ni confirmadas hoy</td></tr>';
 
-    document.getElementById('pedidos-tb').innerHTML = p.length
-      ? p.map(x => `<tr><td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td><td class="p-2 border border-gray-600">${x.total} MAD</td><td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td><td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td></tr>`).join('')
+    document.getElementById('pedidos-tb').innerHTML = pedidos.length
+      ? pedidos.map(x => `
+        <tr>
+          <td class="p-2 border border-gray-600">${x.id.slice(0,8)}</td>
+          <td class="p-2 border border-gray-600">${x.total} MAD</td>
+          <td class="p-2 border border-gray-600">${x.delivery_type||'-'}</td>
+          <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-blue-600 text-black">${x.estado}</span></td>
+        </tr>
+      `).join('')
       : '<tr><td colspan="4" class="p-4 text-center text-gray-400">Sin pedidos activos</td></tr>';
   } catch(e) { console.error('Error carga recepción:', e); }
 }
 async function confirmarReserva(id) {
   if(!confirm('¿Confirmar reserva?')) return;
-  const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, {method:'PATCH'});
+  const res = await fetch(`/api/v1/reservaciones/${id}/confirmar`, { method:'PATCH', credentials: 'include' });
   if(res.ok) { alert('✅ Confirmada'); loadRecepcion(); } else { alert('❌ Error'); }
 }
 async function rechazarReserva(id) {
   if(!confirm('¿Rechazar reserva?')) return;
-  const res = await fetch(`/api/v1/reservaciones/${id}/rechazar`, {method:'PATCH'});
+  const res = await fetch(`/api/v1/reservaciones/${id}/rechazar`, { method:'PATCH', credentials: 'include' });
   if(res.ok) { alert('❌ Rechazada'); loadRecepcion(); } else { alert(' Error'); }
 }
 async function loadMetricas() {
   try {
-    const d = await fetch('/api/v1/dashboard/hoy').then(r => r.json());
-    document.getElementById('metricas-data').innerHTML = `<div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p>Ingresos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p>Pedidos hoy</p></div><div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p>Reservas hoy</p></div>`;
-  } catch(e) {}
+    const d = await fetch('/api/v1/dashboard/hoy', { credentials: 'include' }).then(r => r.json());
+    document.getElementById('metricas-data').innerHTML = `
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-yellow-400">${d.ingresos_hoy} MAD</h3><p>Ingresos hoy</p></div>
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-blue-400">${d.pedidos_hoy}</h3><p>Pedidos hoy</p></div>
+      <div class="bg-gray-700 p-4 rounded-lg text-center"><h3 class="text-2xl font-bold text-green-400">${d.reservas_hoy}</h3><p>Reservas hoy</p></div>
+    `;
+  } catch(e) { console.error('Error metricas:', e); }
 }
 async function loadChatList() {
   try {
-    const list = await fetch('/api/v1/conversaciones').then(r => r.json());
-    document.getElementById('chat-list').innerHTML = list.length ? list.map(c => `<div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition"><div class="font-bold text-sm">📱 ${c.wa_id}</div><div class="text-xs text-gray-400">Fase: ${c.fase}</div></div>`).join('') : '<div class="text-gray-400 text-center py-4">Sin chats</div>';
-  } catch(e) {}
+    const list = await fetch('/api/v1/conversaciones', { credentials: 'include' }).then(r => r.json());
+    document.getElementById('chat-list').innerHTML = list.length ? list.map(c => `
+      <div onclick="openChat('${c.id}','${c.wa_id}')" class="p-3 hover:bg-gray-600 cursor-pointer rounded mb-2 transition">
+        <div class="font-bold text-sm">📱 ${c.wa_id}</div>
+        <div class="text-xs text-gray-400">Fase: ${c.fase}</div>
+      </div>
+    `).join('') : '<div class="text-gray-400 text-center py-4">Sin chats</div>';
+  } catch(e) { console.error('Error chat list:', e); }
 }
 async function openChat(id, wa) {
   document.getElementById('chat-header').innerText = `💬 Chat con ${wa}`;
   try {
-    const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`).then(r => r.json());
-    document.getElementById('chat-messages').innerHTML = msgs.map(m => `<div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2"><div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Sin contenido]'}<div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div></div></div>`).join('');
-  } catch(e) {}
+    const msgs = await fetch(`/api/v1/conversaciones/${id}/mensajes`, { credentials: 'include' }).then(r => r.json());
+    document.getElementById('chat-messages').innerHTML = msgs.map(m => `
+      <div class="flex ${m.direccion==='inbound'?'justify-start':'justify-end'} mb-2">
+        <div class="max-w-[80%] p-3 rounded-lg text-sm ${m.direccion==='inbound'?'bg-gray-600 text-white':'bg-yellow-600 text-black'}">${m.contenido||'[Sin contenido]'}
+          <div class="text-[10px] text-right mt-1 opacity-70">${new Date(m.created_at).toLocaleTimeString()}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) { console.error('Error openChat:', e); }
 }
 document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatList(); setInterval(()=>{ if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000); });
 </script>
@@ -2579,16 +2611,15 @@ document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatL
     <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto"> Salir</a>
   </nav>
   <div id="recepcion" class="tab-content active p-6">
-    <h2 class="text-xl font-bold mb-4">📅 Reservas de hoy</h2>
-    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
-    <h2 class="text-xl font-bold mb-4 mt-8"> Pedidos Activos</h2>
+    <h2 class="text-xl font-bold mb-4">📅 Reservas pendientes y confirmadas hoy</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Fecha / Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Estado</th><th class="p-2 border border-gray-600">Acciones</th></tr></thead><tbody id="reservas-tb"></tbody></table>
+    <h2 class="text-xl font-bold mb-4 mt-8">📦 Pedidos Activos</h2>
     <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">ID</th><th class="p-2 border border-gray-600">Total</th><th class="p-2 border border-gray-600">Tipo</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="pedidos-tb"></tbody></table>
   </div>
   <div id="metricas" class="tab-content p-6"><h2 class="text-xl font-bold mb-4">📊 Dashboard</h2><div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div></div>
   <div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
 </div>
 </body></html>""")
-
 
 # ============================================================
 # RUTAS DEL PANEL
