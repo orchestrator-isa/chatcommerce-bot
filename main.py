@@ -845,8 +845,9 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
 
 
 # Capacidad máxima de una mesa normal (sin contar salones virtuales)
-MAX_CAPACIDAD_MESA_NORMAL = 10  # puedes calcularlo dinámicamente si quieres
 ITEMS_PER_PAGE = 30
+MAX_CAPACIDAD_MESA_NORMAL = 10
+CAPACIDAD_SALON = 30  # ← añade esta línea
 
 
 async def get_menu_page(
@@ -1508,11 +1509,12 @@ async def process_msg(payload: dict):
                     try:
                         result = await db.execute(
                             select(func.max(CalendarioSlot.capacidad)).where(
-                                CalendarioSlot.mesa != "Area completa"
+                                CalendarioSlot.mesa.notin_(["SALON_A", "AREA_COMPLETA"])
                             )
                         )
                         max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error al consultar maximo numero e mesas: {e}")
                         pass
                     if num_personas > max_mesa:
                         # Grupo grande: ofrecer salón
@@ -1598,7 +1600,6 @@ async def process_msg(payload: dict):
                 elif txt in ("si", "yes", "oui", "نعم"):
                     fecha_str = ctx.get("res_fecha")
                     hora_str = ctx.get("res_hora")
-                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                     personas = ctx.get("res_personas", 1)
                     try:
                         fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
@@ -1610,7 +1611,6 @@ async def process_msg(payload: dict):
                             db, conv.id_conversacion, "outbound", reply
                         )
                         await send_wa(phone, reply)
-                        logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                         return  # ✅ Sale de la función
                     disp = await verificar_disponibilidad(
                         db, rid, fecha_obj, hora_obj, personas
@@ -1633,7 +1633,9 @@ async def process_msg(payload: dict):
                         )
                         await send_wa(phone, reply)
                         return  # ✅ Sale de la función
-                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
+                    logger.info(
+                        f"DEBUG: Sin disponibilidad saliendo de res_c con txt={txt}"
+                    )
                     # Si hay disponibilidad, continua con la lógica de reserva...
                     codigo = (
                         f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
@@ -1654,6 +1656,7 @@ async def process_msg(payload: dict):
                     )
                     db.add(res)
                     await db.flush()
+                    logger.info(f"Debug: Reserva creada con ID {res.id_reserva}")
                     bloqueado = await bloquear_mesa_temporal(
                         db,
                         res.id_reserva,
@@ -1663,7 +1666,7 @@ async def process_msg(payload: dict):
                         disp["mesa"],
                         disp["zona"],
                     )
-                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
+                    logger.info(f"DEBUG: Bloqueo exitoso = {bloqueado}")
                     if not bloqueado:
                         await db.rollback()
                         reply = "❌ Error interno. Inténtalo de nuevo."
@@ -1684,6 +1687,7 @@ async def process_msg(payload: dict):
                             "res_personas_grande",
                         ):
                             ctx.pop(k, None)
+                    logger.info("DEBUG: Flujo completado, enviando respuesta")
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
