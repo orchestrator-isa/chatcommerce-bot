@@ -844,7 +844,9 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
     return template.format(**kwargs)
 
 
-ITEMS_PER_PAGE = 33
+# Capacidad máxima de una mesa normal (sin contar salones virtuales)
+MAX_CAPACIDAD_MESA_NORMAL = 10  # puedes calcularlo dinámicamente si quieres
+ITEMS_PER_PAGE = 30
 
 
 async def get_menu_page(
@@ -1501,11 +1503,48 @@ async def process_msg(payload: dict):
                     reply = t("welcome", lang, restaurante=rname)
             elif fase == "res_p":
                 if txt.isdigit():
-                    ctx["res_personas"] = int(txt)
+                    num_personas = int(txt)
+                    max_mesa = MAX_CAPACIDAD_MESA_NORMAL
+                    try:
+                        result = await db.execute(
+                            select(func.max(CalendarioSlot.capacidad)).where(
+                                CalendarioSlot.mesa != "Area completa"
+                            )
+                        )
+                        max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
+                    except:
+                        pass
+                    if num_personas > max_mesa:
+                        # Grupo grande: ofrecer salón
+                        ctx["res_personas_grande"] = num_personas
+                        ctx["fase"] = "preguntar_salon"
+                        reply = "⚠️ Para grupos de más de {} personas, solo podemos ofrecerte area completa (capacidad hasta 30). ¿Deseas reservar el salón? Responde *sí* o *no*.".format(
+                            max_mesa
+                        )
+                    else:
+                        ctx["res_personas"] = num_personas
+                        ctx["fase"] = "res_f"
+                        reply = t("res_fecha", lang)
+                else:
+                    reply = t("res_personas", lang)
+            elif fase == "preguntar_salon":
+                if txt in ("si", "yes", "oui", "sí", "نعم"):
+                    # Usar la capacidad del salón (30) o la cantidad original
+                    ctx["res_personas"] = ctx.get("res_personas_grande", 30)
                     ctx["fase"] = "res_f"
                     reply = t("res_fecha", lang)
                 else:
-                    reply = t("res_personas", lang)
+                    reply = "Reserva cancelada. Puedes intentar con menos personas o contactar directamente."
+                    ctx["fase"] = "menu"
+                    ctx.pop("res_personas_grande", None)
+                    # Limpiar también otras claves de reserva si es necesario
+                    for k in (
+                        "res_personas",
+                        "res_fecha",
+                        "res_hora",
+                        "reserva_config",
+                    ):
+                        ctx.pop(k, None)
             elif fase == "res_f":
                 try:
                     fecha_obj = datetime.strptime(txt_raw, "%Y-%m-%d").date()
@@ -1630,9 +1669,21 @@ async def process_msg(payload: dict):
                         reply = "❌ Error interno. Inténtalo de nuevo."
                         ctx["fase"] = "res_h"
                     else:
-                        reply = t("res_saved", lang, codigo=codigo)
-                        reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                        if disp["mesa"] in ("SALON_A", "AREA_COMPLETA"):
+                            reply = f"✅ Salón reservado para tu evento. Capacidad máxima {CAPACIDAD_SALON} personas.\nCódigo: {codigo}\n⏳ *Mesa virtual reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                        else:
+                            reply = t("res_saved", lang, codigo=codigo)
+                            reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
                         ctx["fase"] = "menu"
+                        # Limpiar claves temporales
+                        for k in (
+                            "res_personas",
+                            "res_fecha",
+                            "res_hora",
+                            "reserva_config",
+                            "res_personas_grande",
+                        ):
+                            ctx.pop(k, None)
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
