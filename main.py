@@ -846,7 +846,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
 
 # Capacidad máxima de una mesa normal (sin contar salones virtuales)
 ITEMS_PER_PAGE = 30
-MAX_CAPACIDAD_MESA_NORMAL = 10
+MAX_CAPACIDAD_MESA_NORMAL = 6
 CAPACIDAD_SALON = 30  # ← añade esta línea
 
 
@@ -1503,32 +1503,32 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("welcome", lang, restaurante=rname)
             elif fase == "res_p":
-                if txt.isdigit():
-                    num_personas = int(txt)
+                if not txt or not txt.isdigit():  # Validar que txt no esté vacío y sea un número
+                    reply = "❌ Por favor, ingresa un número válido de personas."
+                    ctx["fase"] = "res_p"
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
+                try:
+                    result = await db.execute(
+                        select(func.max(CalendarioSlot.capacidad))
+                        .where(~CalendarioSlot.mesa.in_(['SALON_A', 'AREA_COMPLETA']))  # Usar ~in_ para excluir
+                    )
+                    max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
+                except Exception as e:
+                    logger.error(f"Error consultando capacidad máxima: {e}")
                     max_mesa = MAX_CAPACIDAD_MESA_NORMAL
-                    try:
-                        result = await db.execute(
-                            select(func.max(CalendarioSlot.capacidad)).where(
-                                CalendarioSlot.mesa.notin_(["SALON_A", "AREA_COMPLETA"])
-                            )
-                        )
-                        max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
-                    except Exception as e:
-                        logger.error(f"Error al consultar maximo numero e mesas: {e}")
-                        pass
-                    if num_personas > max_mesa:
-                        # Grupo grande: ofrecer salón
-                        ctx["res_personas_grande"] = num_personas
-                        ctx["fase"] = "preguntar_salon"
-                        reply = "⚠️ Para grupos de más de {} personas, solo podemos ofrecerte area completa (capacidad hasta 30). ¿Deseas reservar el salón? Responde *sí* o *no*.".format(
-                            max_mesa
-                        )
-                    else:
-                        ctx["res_personas"] = num_personas
-                        ctx["fase"] = "res_f"
-                        reply = t("res_fecha", lang)
+                num_personas = int(txt)
+                if num_personas > max_mesa:
+                    ctx["res_personas_grande"] = num_personas
+                    ctx["fase"] = "preguntar_salon"
+                    reply = f"⚠️ Para grupos de más de {max_mesa} personas, solo podemos ofrecerte el salón completo (capacidad hasta {CAPACIDAD_SALON}). ¿Deseas reservar el salón? Responde *sí* o *no*."
                 else:
-                    reply = t("res_personas", lang)
+                    ctx["res_personas"] = num_personas
+                    ctx["fase"] = "res_f"
+                    reply = t("res_fecha", lang)
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
             elif fase == "preguntar_salon":
                 if txt in ("si", "yes", "oui", "sí", "نعم"):
                     # Usar la capacidad del salón (30) o la cantidad original
@@ -1594,7 +1594,10 @@ async def process_msg(payload: dict):
                 logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                 cfg = ctx.get("reserva_config", {})
                 max_guests = cfg.get("max_guests", 10)
-                if ctx.get("res_personas", 1) > max_guests:
+                personas = ctx.get("res_personas", 1)
+                es_grupo_grande = ctx.get("res_personas_grande") is not None
+
+                if not es_grupo_grande and personas > max_guests:
                     reply = t("res_error_capacity", lang, max=max_guests)
                     ctx["fase"] = "menu"
                 elif txt in ("si", "yes", "oui", "نعم"):
