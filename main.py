@@ -1550,6 +1550,7 @@ async def process_msg(payload: dict):
                 except ValueError:
                     reply = t("res_hora", lang)
             elif fase == "res_c":
+                logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                 cfg = ctx.get("reserva_config", {})
                 max_guests = cfg.get("max_guests", 10)
                 if ctx.get("res_personas", 1) > max_guests:
@@ -1558,6 +1559,7 @@ async def process_msg(payload: dict):
                 elif txt in ("si", "yes", "oui", "نعم"):
                     fecha_str = ctx.get("res_fecha")
                     hora_str = ctx.get("res_hora")
+                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                     personas = ctx.get("res_personas", 1)
                     try:
                         fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d").date()
@@ -1569,6 +1571,7 @@ async def process_msg(payload: dict):
                             db, conv.id_conversacion, "outbound", reply
                         )
                         await send_wa(phone, reply)
+                        logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                         return  # ✅ Sale de la función
                     disp = await verificar_disponibilidad(
                         db, rid, fecha_obj, hora_obj, personas
@@ -1591,7 +1594,7 @@ async def process_msg(payload: dict):
                         )
                         await send_wa(phone, reply)
                         return  # ✅ Sale de la función
-
+                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                     # Si hay disponibilidad, continua con la lógica de reserva...
                     codigo = (
                         f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
@@ -1621,7 +1624,7 @@ async def process_msg(payload: dict):
                         disp["mesa"],
                         disp["zona"],
                     )
-
+                    logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                     if not bloqueado:
                         await db.rollback()
                         reply = "❌ Error interno. Inténtalo de nuevo."
@@ -1633,6 +1636,14 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
+                    for k in (
+                        "res_personas",
+                        "res_fecha",
+                        "res_hora",
+                        "reserva_config",
+                    ):
+                        ctx.pop(k, None)
+                        logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
             if reply:
                 conv.contexto_bot = clean_serializable(ctx)
                 conv.last_message_at = now_utc()
