@@ -607,25 +607,26 @@ async def verificar_disponibilidad(
             "zona": mesa.zona,
             "capacidad": mesa.capacidad,
         }
-    alt_query = (
-        select(CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona)
-        .where(
-            CalendarioSlot.restaurante_id == restaurante_id,
-            CalendarioSlot.fecha == fecha,
-            CalendarioSlot.ocupado == False,
-            CalendarioSlot.capacidad >= num_personas,
-        )
-        .distinct()
-        .order_by(CalendarioSlot.hora)
-        .limit(5)
+        # Después de la parte que busca mesa disponible (if mesa: ...)
+    # Construir consulta de alternativas excluyendo salón si el grupo es pequeño
+    alt_query = select(
+        CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona
+    ).where(
+        CalendarioSlot.restaurante_id == restaurante_id,
+        CalendarioSlot.fecha == fecha,
+        CalendarioSlot.ocupado == False,
+        CalendarioSlot.capacidad >= num_personas,
     )
+    # Excluir salón virtual si el grupo es pequeño (menos de 12 personas)
+    if num_personas <= 12:   # Puedes ajustar el umbral (MAX_PERSONAS_NORMAL)
+        alt_query = alt_query.where(CalendarioSlot.mesa.notin_(['SALON_A', 'AREA_COMPLETA']))
+    alt_query = alt_query.distinct().order_by(CalendarioSlot.hora).limit(5)
     alt_result = await db.execute(alt_query)
     alternativas = [
         {"hora": a.hora.strftime("%H:%M"), "mesa": a.mesa, "zona": a.zona}
         for a in alt_result.all()
     ]
     return {"disponible": False, "alternativas": alternativas}
-
 
 async def bloquear_mesa_temporal(
     db: AsyncSession,
@@ -1741,9 +1742,7 @@ async def process_msg(payload: dict):
                         await send_wa(phone, reply)
                         return
                     # Si hay disponibilidad, crear reserva
-                    codigo = (
-                        f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
-                    )
+                    codigo = f"RES-{now_utc().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4]}"
                     expira = now_utc() + timedelta(minutes=20)
                     res = Reservacion(
                         id_restaurante=rid,
@@ -1787,12 +1786,7 @@ async def process_msg(payload: dict):
                             )
                         else:
                             reply = t("res_saved", lang, codigo=codigo)
-                            reply += "\n⏳ " + t(
-                                "res_provisional",
-                                lang,
-                                mesa=disp["mesa"],
-                                zona=disp["zona"],
-                            )
+                            reply += f"\n⏳ {t('res_provisional', lang)} (Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.)"
                         ctx["fase"] = "menu"
                         # Limpiar claves temporales
                         for k in (
