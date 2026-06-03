@@ -1786,7 +1786,7 @@ async def process_msg(payload: dict):
                             )
                         else:
                             reply = t("res_saved", lang, codigo=codigo)
-                            reply += f"\n⏳ {t('res_provisional', lang)} (Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.)"
+                            reply += f"\n⏳ {t('res_provisional', lang, mesa=disp['mesa'], zona=disp['zona'])}"
                         ctx["fase"] = "menu"
                         # Limpiar claves temporales
                         for k in (
