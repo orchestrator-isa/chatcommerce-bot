@@ -786,7 +786,7 @@ I18N = {
         "res_error_capacity": "❌ Max {max} guests.",
         "res_error_internal": "❌ Internal error. Please try again.",
         "res_saved_salon": "✅ Room reserved for your event. Maximum capacity {capacity} people.\nCode: {code}\n⏳ *Virtual table provisionally reserved for 20 min.*\nOur team will confirm shortly.",
-        "res_provisional": "Table {table} ({zone}) provisionally reserved for 20 min.*\nOur team will confirm shortly.",
+        "res_provisional": "Table {mesa} ({zona}) provisionally reserved for 20 min.*\nOur team will confirm shortly.",
     },
     "fr": {
         "welcome": "🌍 Bienvenue à {restaurante}\nChoisissez votre langue:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇦 d → Darija\n\n `menu pdf` pour télécharger le menu",
@@ -825,7 +825,7 @@ I18N = {
         "res_error_capacity": " Maximum {max} personnes.",
         "res_error_internal": "❌ Erreur interne. Veuillez réessayer.",
         "res_saved_salon": "✅ Salle réservée pour votre événement. Capacité maximale : {capacity} personnes.\nCode : {code}\n⏳ *Table virtuelle réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
-        "res_provisional": "Table {table} ({zone}) réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
+        "res_provisional": "Table {mesa} ({zona}) réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
     },
     "dar": {
         "welcome": " Mrahba bik f {restaurante}\nKhtar lougha:\n🇪 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` bach tchouf lmenu",
