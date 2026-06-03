@@ -1503,7 +1503,9 @@ async def process_msg(payload: dict):
                 else:
                     reply = t("welcome", lang, restaurante=rname)
             elif fase == "res_p":
-                if not txt or not txt.isdigit():  # Validar que txt no esté vacío y sea un número
+                if (
+                    not txt or not txt.isdigit()
+                ):  # Validar que txt no esté vacío y sea un número
                     reply = "❌ Por favor, ingresa un número válido de personas."
                     ctx["fase"] = "res_p"
                     await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
@@ -1511,8 +1513,9 @@ async def process_msg(payload: dict):
                     return
                 try:
                     result = await db.execute(
-                        select(func.max(CalendarioSlot.capacidad))
-                        .where(~CalendarioSlot.mesa.in_(['SALON_A', 'AREA_COMPLETA']))  # Usar ~in_ para excluir
+                        select(func.max(CalendarioSlot.capacidad)).where(
+                            ~CalendarioSlot.mesa.in_(["SALON_A", "AREA_COMPLETA"])
+                        )  # Usar ~in_ para excluir
                     )
                     max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
                 except Exception as e:
@@ -1523,12 +1526,14 @@ async def process_msg(payload: dict):
                     ctx["res_personas_grande"] = num_personas
                     ctx["fase"] = "preguntar_salon"
                     reply = f"⚠️ Para grupos de más de {max_mesa} personas, solo podemos ofrecerte el salón completo (capacidad hasta {CAPACIDAD_SALON}). ¿Deseas reservar el salón? Responde *sí* o *no*."
+                    return
                 else:
                     ctx["res_personas"] = num_personas
                     ctx["fase"] = "res_f"
                     reply = t("res_fecha", lang)
-                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
-                await send_wa(phone, reply)
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
             elif fase == "preguntar_salon":
                 if txt in ("si", "yes", "oui", "sí", "نعم"):
                     # Usar la capacidad del salón (30) o la cantidad original
