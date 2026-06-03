@@ -618,8 +618,10 @@ async def verificar_disponibilidad(
         CalendarioSlot.capacidad >= num_personas,
     )
     # Excluir salón virtual si el grupo es pequeño (menos de 12 personas)
-    if num_personas <= 12:   # Puedes ajustar el umbral (MAX_PERSONAS_NORMAL)
-        alt_query = alt_query.where(CalendarioSlot.mesa.notin_(['SALON_A', 'AREA_COMPLETA']))
+    if num_personas <= 12:  # Puedes ajustar el umbral (MAX_PERSONAS_NORMAL)
+        alt_query = alt_query.where(
+            CalendarioSlot.mesa.notin_(["SALON_A", "AREA_COMPLETA"])
+        )
     alt_query = alt_query.distinct().order_by(CalendarioSlot.hora).limit(5)
     alt_result = await db.execute(alt_query)
     alternativas = [
@@ -627,6 +629,7 @@ async def verificar_disponibilidad(
         for a in alt_result.all()
     ]
     return {"disponible": False, "alternativas": alternativas}
+
 
 async def bloquear_mesa_temporal(
     db: AsyncSession,
