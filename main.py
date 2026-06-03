@@ -636,20 +636,38 @@ async def bloquear_mesa_temporal(
     mesa: str,
     zona: str,
 ) -> bool:
-    stmt = (
-        update(CalendarioSlot)
-        .where(
-            CalendarioSlot.restaurante_id == restaurante_id,
-            CalendarioSlot.fecha == fecha,
-            CalendarioSlot.hora == hora,
-            CalendarioSlot.mesa == mesa,
-            CalendarioSlot.ocupado == False,
+    try:
+        # Usar SELECT FOR UPDATE para evitar carrera
+        stmt = (
+            select(CalendarioSlot)
+            .where(
+                CalendarioSlot.restaurante_id == restaurante_id,
+                CalendarioSlot.fecha == fecha,
+                CalendarioSlot.hora == hora,
+                CalendarioSlot.mesa == mesa,
+                CalendarioSlot.ocupado == False,
+            )
+            .with_for_update()
         )
-        .values(ocupado=True, reservacion_id=reservacion_id, tipo_bloqueo="temporal")
-    )
-    result = await db.execute(stmt)
-    await db.flush()
-    return result.rowcount > 0
+        slot = (await db.execute(stmt)).scalar_one_or_none()
+        if not slot:
+            logger.warning(
+                f"No se encontró slot disponible para {fecha} {hora} mesa {mesa}"
+            )
+            return False
+        # Actualizar
+        slot.ocupado = True
+        slot.reservacion_id = reservacion_id
+        slot.tipo_bloqueo = "temporal"
+        await db.flush()
+        logger.info(
+            f"Mesa {mesa} bloqueada temporalmente para reserva {reservacion_id}"
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error en bloquear_mesa_temporal: {e}", exc_info=True)
+        await db.rollback()
+        return False
 
 
 async def confirmar_mesa_definitiva(db: AsyncSession, reservacion_id: uuid.UUID):
@@ -726,6 +744,9 @@ I18N = {
         "res_error_date_range": "❌ Solo hasta {max} días.",
         "res_error_hours": "❌ Cerrado en ese horario.",
         "res_error_capacity": "❌ Máximo {max} personas.",
+        "res_error_internal": "❌ Error interno. Inténtalo de nuevo.",
+        "res_saved_salon": "✅ Salón reservado para tu evento. Capacidad máxima {capacidad} personas.\nCódigo: {codigo}\n⏳ *Mesa virtual reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve.",
+        "res_provisional": "Mesa {mesa} ({zona}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve.",
     },
     "en": {
         "welcome": "🌍 Welcome to {restaurante}\nChoose language:\n🇪🇸 s → Spanish\n🇬 e → English\n🇫🇷 f → French\n🇲🇦 d → Darija\n\n📄 `menu pdf` for menu PDF",
@@ -762,6 +783,9 @@ I18N = {
         "res_error_date_range": "❌ Max {max} days.",
         "res_error_hours": "❌ Closed at this time.",
         "res_error_capacity": "❌ Max {max} guests.",
+        "res_error_internal": "❌ Internal error. Please try again.",
+        "res_saved_salon": "✅ Room reserved for your event. Maximum capacity {capacity} people.\nCode: {code}\n⏳ *Virtual table provisionally reserved for 20 min.*\nOur team will confirm shortly.",
+        "res_provisional": "Table {table} ({zone}) provisionally reserved for 20 min.*\nOur team will confirm shortly.",
     },
     "fr": {
         "welcome": "🌍 Bienvenue à {restaurante}\nChoisissez votre langue:\n🇪🇸 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇦 d → Darija\n\n `menu pdf` pour télécharger le menu",
@@ -798,6 +822,9 @@ I18N = {
         "res_error_date_range": "❌ Jusqu'à {max} jours.",
         "res_error_hours": "❌ Fermé à cette heure.",
         "res_error_capacity": " Maximum {max} personnes.",
+        "res_error_internal": "❌ Erreur interne. Veuillez réessayer.",
+        "res_saved_salon": "✅ Salle réservée pour votre événement. Capacité maximale : {capacity} personnes.\nCode : {code}\n⏳ *Table virtuelle réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
+        "res_provisional": "Table {table} ({zone}) réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
     },
     "dar": {
         "welcome": " Mrahba bik f {restaurante}\nKhtar lougha:\n🇪 s → Espagnol\n🇬🇧 e → Anglais\n🇫🇷 f → Français\n🇲🇦 d → Darija\n\n📄 `menu pdf` bach tchouf lmenu",
@@ -834,6 +861,9 @@ I18N = {
         "res_error_date_range": "❌ Hadi {max} nharat.",
         "res_error_hours": "❌ Restaurant msaker f had l'waqt.",
         "res_error_capacity": "❌ Max {max} personnes.",
+        "res_error_internal": "❌ W9e3 chi mouchkil dakhili. 3awed jarrab.",
+        "res_saved_salon": "✅ T7jez saloun dyalek l l'événement. L9odra l9swa {capacidad} chakhs.\nCode: {codigo}\n⏳ *La table virtuelle t7jezat m2a9atan lmoddat 20 دقيقة.*\nL'équipe dyalna ghadi t2akked lik l7ajz 9riban.",
+        "res_provisional": "Table {mesa} ({zona}) t7jezat m2a9atan lmoddat 20 da9i9a.*\nL'équipe dyalna ghadi t2akked lik l7ajz 9riban.",
     },
 }
 
@@ -1741,14 +1771,28 @@ async def process_msg(payload: dict):
                     )
                     if not bloqueado:
                         await db.rollback()
-                        reply = "❌ Error interno. Inténtalo de nuevo."
+                        reply = (
+                            t("res_error_internal", lang)
+                            if "res_error_internal" in I18N.get(lang, {})
+                            else "❌ Error interno. Inténtalo de nuevo."
+                        )
                         ctx["fase"] = "res_h"
                     else:
                         if disp["mesa"] in ("SALON_A", "AREA_COMPLETA"):
-                            reply = f"✅ Salón reservado para tu evento. Capacidad máxima {CAPACIDAD_SALON} personas.\nCódigo: {codigo}\n⏳ *Mesa virtual reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                            reply = t(
+                                "res_saved_salon",
+                                lang,
+                                codigo=codigo,
+                                capacidad=CAPACIDAD_SALON,
+                            )
                         else:
                             reply = t("res_saved", lang, codigo=codigo)
-                            reply += f"\n⏳ *Mesa {disp['mesa']} ({disp['zona']}) reservada provisionalmente por 20 min.*\nNuestro equipo confirmará en breve."
+                            reply += "\n⏳ " + t(
+                                "res_provisional",
+                                lang,
+                                mesa=disp["mesa"],
+                                zona=disp["zona"],
+                            )
                         ctx["fase"] = "menu"
                         # Limpiar claves temporales
                         for k in (
