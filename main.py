@@ -2862,10 +2862,10 @@ document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatL
 <body class="bg-gray-900 text-gray-100 min-h-screen p-4">
 <div class="max-w-7xl mx-auto bg-gray-800 rounded-lg shadow-xl overflow-hidden">
   <nav class="flex border-b border-gray-700">
-    <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
-    <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
-    <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
-    <button data-tab="confirmadas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">✅ Confirmadas</button>
+    <button onclick="showTab('recepcion')" data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
+    <button onclick="showTab('metricas')" data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
+    <button onclick="showTab('chats')" data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+    <button onclick="showTab('confirmadas')" data-tab="confirmadas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">✅ Confirmadas</button>
     <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto"> Salir</a>
   </nav>
   <div id="recepcion" class="tab-content active p-6">
