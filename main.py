@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ruff: noqa: E501
 """
-ORQUESTRATOR ISA v19.0 - FLUJO DE PEDIDO COMPLETO + DISPONIBILIDAD ATÓMICA
-v19.0: Reservas con disponibilidad real (calendario_slots), estado 'solicitada' con TTL,
+ORQUESTRATOR ISA v19.9 - FLUJO DE PEDIDO COMPLETO + DISPONIBILIDAD ATÓMICA
+v19.9: Reservas con disponibilidad real (calendario_slots), estado 'solicitada' con TTL,
        panel unificado, traducciones completas, flujo de pago optimizado.
 """
 
@@ -607,22 +607,18 @@ async def verificar_disponibilidad(
             "zona": mesa.zona,
             "capacidad": mesa.capacidad,
         }
-        # Después de la parte que busca mesa disponible (if mesa: ...)
-    # Construir consulta de alternativas excluyendo salón si el grupo es pequeño
-    alt_query = select(
-        CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona
-    ).where(
-        CalendarioSlot.restaurante_id == restaurante_id,
-        CalendarioSlot.fecha == fecha,
-        CalendarioSlot.ocupado == False,
-        CalendarioSlot.capacidad >= num_personas,
-    )
-    # Excluir salón virtual si el grupo es pequeño (menos de 12 personas)
-    if num_personas <= 12:  # Puedes ajustar el umbral (MAX_PERSONAS_NORMAL)
-        alt_query = alt_query.where(
-            CalendarioSlot.mesa.notin_(["SALON_A", "AREA_COMPLETA"])
+    alt_query = (
+        select(CalendarioSlot.hora, CalendarioSlot.mesa, CalendarioSlot.zona)
+        .where(
+            CalendarioSlot.restaurante_id == restaurante_id,
+            CalendarioSlot.fecha == fecha,
+            CalendarioSlot.ocupado == False,
+            CalendarioSlot.capacidad >= num_personas,
         )
-    alt_query = alt_query.distinct().order_by(CalendarioSlot.hora).limit(5)
+        .distinct()
+        .order_by(CalendarioSlot.hora)
+        .limit(5)
+    )
     alt_result = await db.execute(alt_query)
     alternativas = [
         {"hora": a.hora.strftime("%H:%M"), "mesa": a.mesa, "zona": a.zona}
@@ -640,38 +636,20 @@ async def bloquear_mesa_temporal(
     mesa: str,
     zona: str,
 ) -> bool:
-    try:
-        # Usar SELECT FOR UPDATE para evitar carrera
-        stmt = (
-            select(CalendarioSlot)
-            .where(
-                CalendarioSlot.restaurante_id == restaurante_id,
-                CalendarioSlot.fecha == fecha,
-                CalendarioSlot.hora == hora,
-                CalendarioSlot.mesa == mesa,
-                CalendarioSlot.ocupado == False,
-            )
-            .with_for_update()
+    stmt = (
+        update(CalendarioSlot)
+        .where(
+            CalendarioSlot.restaurante_id == restaurante_id,
+            CalendarioSlot.fecha == fecha,
+            CalendarioSlot.hora == hora,
+            CalendarioSlot.mesa == mesa,
+            CalendarioSlot.ocupado == False,
         )
-        slot = (await db.execute(stmt)).scalar_one_or_none()
-        if not slot:
-            logger.warning(
-                f"No se encontró slot disponible para {fecha} {hora} mesa {mesa}"
-            )
-            return False
-        # Actualizar
-        slot.ocupado = True
-        slot.reservacion_id = reservacion_id
-        slot.tipo_bloqueo = "temporal"
-        await db.flush()
-        logger.info(
-            f"Mesa {mesa} bloqueada temporalmente para reserva {reservacion_id}"
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Error en bloquear_mesa_temporal: {e}", exc_info=True)
-        await db.rollback()
-        return False
+        .values(ocupado=True, reservacion_id=reservacion_id, tipo_bloqueo="temporal")
+    )
+    result = await db.execute(stmt)
+    await db.flush()
+    return result.rowcount > 0
 
 
 async def confirmar_mesa_definitiva(db: AsyncSession, reservacion_id: uuid.UUID):
@@ -788,7 +766,7 @@ I18N = {
         "res_error_hours": "❌ Closed at this time.",
         "res_error_capacity": "❌ Max {max} guests.",
         "res_error_internal": "❌ Internal error. Please try again.",
-        "res_saved_salon": "✅ Room reserved for your event. Maximum capacity {capacity} people.\nCode: {code}\n⏳ *Virtual table provisionally reserved for 20 min.*\nOur team will confirm shortly.",
+        "res_saved_salon": "✅ Room reserved for your event. Maximum capacity {capacity} people.\nCode: {codigo}\n⏳ *Virtual table provisionally reserved for 20 min.*\nOur team will confirm shortly.",
         "res_provisional": "Table {mesa} ({zona}) provisionally reserved for 20 min.*\nOur team will confirm shortly.",
     },
     "fr": {
@@ -827,7 +805,7 @@ I18N = {
         "res_error_hours": "❌ Fermé à cette heure.",
         "res_error_capacity": " Maximum {max} personnes.",
         "res_error_internal": "❌ Erreur interne. Veuillez réessayer.",
-        "res_saved_salon": "✅ Salle réservée pour votre événement. Capacité maximale : {capacity} personnes.\nCode : {code}\n⏳ *Table virtuelle réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
+        "res_saved_salon": "✅ Salle réservée pour votre événement. Capacité maximale : {capacidad} personnes.\nCode : {codigo}\n⏳ *Table virtuelle réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
         "res_provisional": "Table {mesa} ({zona}) réservée provisoirement pendant 20 minutes.*\nNotre équipe vous confirmera sous peu.",
     },
     "dar": {
@@ -865,8 +843,8 @@ I18N = {
         "res_error_date_range": "❌ Hadi {max} nharat.",
         "res_error_hours": "❌ Restaurant msaker f had l'waqt.",
         "res_error_capacity": "❌ Max {max} personnes.",
-        "res_error_internal": "❌ W9e3 chi mouchkil dakhili. 3awed jarrab.",
-        "res_saved_salon": "✅ T7jez saloun dyalek l l'événement. L9odra l9swa {capacidad} chakhs.\nCode: {codigo}\n⏳ *La table virtuelle t7jezat m2a9atan lmoddat 20 دقيقة.*\nL'équipe dyalna ghadi t2akked lik l7ajz 9riban.",
+        "res_error_internal": "❌ Khata2 dakhli. 3awed jarr.",
+        "res_saved_salon": "✅ T7jez saloun dyalek l l'événement. L9odra l9swa {capacidad} chakhs.\nCode: {codigo}\n⏳ *La table virtuelle t7jezat m2a9atan lmoddat 20 da9i9a.*\nL'équipe dyalna ghadi t2akked lik l7ajz 9riban.",
         "res_provisional": "Table {mesa} ({zona}) t7jezat m2a9atan lmoddat 20 da9i9a.*\nL'équipe dyalna ghadi t2akked lik l7ajz 9riban.",
     },
 }
@@ -1035,6 +1013,7 @@ async def process_msg(payload: dict):
     except (KeyError, IndexError) as e:
         logger.error(f"Error al procesar payload: {e}")
         return
+    # Nuevo try que abarca toda la lógica del bot
     try:
         phone = msg["from"]
         txt_raw = msg["text"]["body"].strip()
@@ -1610,7 +1589,9 @@ async def process_msg(payload: dict):
                 return
             elif fase == "preguntar_salon":
                 if txt in ("si", "yes", "oui", "sí", "نعم"):
-                    ctx["res_personas"] = ctx.get("res_personas_grande", 30)
+                    ctx["res_personas"] = ctx.get(
+                        "res_personas_grande", CAPACIDAD_SALON
+                    )
                     ctx["fase"] = "res_f"
                     reply = t("res_fecha", lang)
                 else:
@@ -1744,7 +1725,7 @@ async def process_msg(payload: dict):
                         )
                         await send_wa(phone, reply)
                         return
-                    # Si hay disponibilidad, crear reserva
+                    # Si hay disponibilidad, crear reserva con código único
                     codigo = f"RES-{now_utc().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4]}"
                     expira = now_utc() + timedelta(minutes=20)
                     res = Reservacion(
@@ -1756,7 +1737,7 @@ async def process_msg(payload: dict):
                         hora_reserva=hora_obj,
                         mesa_asignada=disp["mesa"],
                         zona=disp["zona"],
-                        estado="solicitada",
+                        estado=EstadoReserva.solicitada,
                         expira_at=expira,
                         confirmada_por="ai",
                     )
@@ -1773,11 +1754,7 @@ async def process_msg(payload: dict):
                     )
                     if not bloqueado:
                         await db.rollback()
-                        reply = (
-                            t("res_error_internal", lang)
-                            if "res_error_internal" in I18N.get(lang, {})
-                            else "❌ Error interno. Inténtalo de nuevo."
-                        )
+                        reply = t("res_error_internal", lang)
                         ctx["fase"] = "res_h"
                     else:
                         if disp["mesa"] in ("SALON_A", "AREA_COMPLETA"):
@@ -1822,7 +1799,6 @@ async def process_msg(payload: dict):
                     await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
                     await send_wa(phone, reply)
                     return
-            # Fin de fases
             # Si por algún motivo se llegara aquí sin reply, se ignora
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
@@ -1914,7 +1890,9 @@ async def confirmar_reserva(
                 await db.execute(
                     update(Reservacion)
                     .where(Reservacion.id_reserva == id)
-                    .values(estado="expirada", mesa_asignada=None, zona=None)
+                    .values(
+                        estado=EstadoReserva.expirada, mesa_asignada=None, zona=None
+                    )
                 )
                 raise HTTPException(410, "Expirada")
             await db.execute(
@@ -1940,12 +1918,19 @@ async def confirmar_reserva(
                     select(Cliente).where(Cliente.id_cliente == reserva.id_cliente)
                 )
             ).scalar_one()
-            await send_wa(
-                cliente.wa_id,
-                f"✅ *Reserva Confirmada*\n📅 {reserva.fecha_reserva} a las {reserva.hora_reserva}\n🪑 Mesa {reserva.mesa_asignada} ({reserva.zona})\n🔢 Código: {reserva.codigo_reserva}",
+            lang = cliente.language_pref
+            mensaje = t(
+                "res_confirmada_notify",
+                lang,
+                fecha=reserva.fecha_reserva.isoformat(),
+                hora=reserva.hora_reserva.strftime("%H:%M"),
+                mesa=reserva.mesa_asignada,
+                zona=reserva.zona or "",
+                codigo=reserva.codigo_reserva,
             )
-        except Exception:
-            pass
+            await send_wa(cliente.wa_id, mensaje)
+        except Exception as e:
+            logger.error(f"Error notificando confirmación: {e}")
         return {"status": "ok"}
 
 
@@ -1979,11 +1964,11 @@ async def rechazar_reserva(
                     select(Cliente).where(Cliente.id_cliente == reserva.id_cliente)
                 )
             ).scalar_one()
-            await send_wa(
-                cliente.wa_id, "❌ Reserva rechazada. Por favor intenta otra hora."
-            )
-        except Exception:
-            pass
+            lang = cliente.language_pref
+            mensaje = t("res_rechazada_notify", lang)
+            await send_wa(cliente.wa_id, mensaje)
+        except Exception as e:
+            logger.error(f"Error notificando rechazo: {e}")
         return {"status": "rechazada"}
 
 
@@ -2667,6 +2652,39 @@ async def reservas_pendientes(
         ]
 
 
+# Nuevo endpoint para reservas confirmadas (todas)
+@app.get("/api/v1/reservaciones/confirmadas")
+async def reservas_confirmadas(
+    restaurante_id: uuid.UUID = Depends(get_restaurante_id_optional),
+):
+    if not async_session_maker:
+        raise HTTPException(503, "DB offline")
+    async with async_session_maker() as db:
+        res = await db.execute(
+            select(Reservacion)
+            .where(
+                Reservacion.id_restaurante == restaurante_id,
+                Reservacion.estado == EstadoReserva.confirmada,
+            )
+            .order_by(Reservacion.fecha_reserva.desc(), Reservacion.hora_reserva.desc())
+        )
+        reservas = res.scalars().all()
+        return [
+            {
+                "id": str(r.id_reserva),
+                "codigo_reserva": r.codigo_reserva,
+                "num_personas": r.num_personas,
+                "fecha_reserva": r.fecha_reserva.isoformat(),
+                "hora_reserva": r.hora_reserva.strftime("%H:%M"),
+                "mesa_asignada": r.mesa_asignada,
+                "zona": r.zona,
+                "estado": r.estado.value,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in reservas
+        ]
+
+
 # ============================================================
 # VARIABLES HTML
 # ============================================================
@@ -2743,6 +2761,7 @@ function showTab(tabId) {
   if(tabId==='recepcion') loadRecepcion();
   if(tabId==='metricas') loadMetricas();
   if(tabId==='chats') loadChatList();
+  if(tabId==='confirmadas') loadConfirmadas();
 }
 async function loadRecepcion() {
   try {
@@ -2820,6 +2839,23 @@ async function openChat(id, wa) {
     `).join('');
   } catch(e) { console.error('Error openChat:', e); }
 }
+async function loadConfirmadas() {
+  try {
+    const reservas = await fetch('/api/v1/reservaciones/confirmadas', { credentials: 'include' }).then(r => r.json());
+    document.getElementById('confirmadas-tb').innerHTML = reservas.length
+      ? reservas.map(x => `
+        <tr>
+          <td class="p-2 border border-gray-600">${x.codigo_reserva}</td>
+          <td class="p-2 border border-gray-600">${x.num_personas}</td>
+          <td class="p-2 border border-gray-600">${x.fecha_reserva} ${x.hora_reserva}</td>
+          <td class="p-2 border border-gray-600">${x.mesa_asignada || '-'}</td>
+          <td class="p-2 border border-gray-600">${x.zona || '-'}</td>
+          <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs bg-green-500 text-black">${x.estado}</span></td>
+        </tr>
+      `).join('')
+      : '<tr><td colspan="6" class="p-4 text-center text-gray-400">No hay reservas confirmadas</td></tr>';
+  } catch(e) { console.error('Error cargando confirmadas:', e); }
+}
 document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatList(); setInterval(()=>{ if(document.getElementById('recepcion').classList.contains('active')) loadRecepcion(); }, 15000); });
 </script>
 </head>
@@ -2829,6 +2865,7 @@ document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatL
     <button data-tab="recepcion" class="tab-btn active px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📅 Recepción</button>
     <button data-tab="metricas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">📊 Métricas</button>
     <button data-tab="chats" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">💬 Chats</button>
+    <button data-tab="confirmadas" class="tab-btn px-6 py-3 text-sm font-medium hover:text-yellow-400 transition">✅ Confirmadas</button>
     <a href="/panel/logout" class="px-6 py-3 text-sm font-medium hover:text-red-400 transition ml-auto"> Salir</a>
   </nav>
   <div id="recepcion" class="tab-content active p-6">
@@ -2839,6 +2876,10 @@ document.addEventListener('DOMContentLoaded', () => { loadRecepcion(); loadChatL
   </div>
   <div id="metricas" class="tab-content p-6"><h2 class="text-xl font-bold mb-4">📊 Dashboard</h2><div id="metricas-data" class="grid grid-cols-1 md:grid-cols-4 gap-4"></div></div>
   <div id="chats" class="tab-content p-6 h-[75vh]"><div class="grid grid-cols-3 gap-4 h-full"><div class="bg-gray-700 rounded-lg p-3 overflow-y-auto" id="chat-list"></div><div class="col-span-2 bg-gray-700 rounded-lg p-4 flex flex-col"><div id="chat-header" class="text-yellow-400 font-bold mb-3 border-b border-gray-600 pb-2">Selecciona chat</div><div id="chat-messages" class="flex-1 overflow-y-auto space-y-3 p-2"></div></div></div></div>
+  <div id="confirmadas" class="tab-content p-6">
+    <h2 class="text-xl font-bold mb-4">✅ Reservas Confirmadas (todas)</h2>
+    <table class="w-full text-left border-collapse"><thead class="bg-gray-700"><tr><th class="p-2 border border-gray-600">Código</th><th class="p-2 border border-gray-600">Personas</th><th class="p-2 border border-gray-600">Fecha / Hora</th><th class="p-2 border border-gray-600">Mesa</th><th class="p-2 border border-gray-600">Zona</th><th class="p-2 border border-gray-600">Estado</th></tr></thead><tbody id="confirmadas-tb"></tbody></table>
+  </div>
 </div>
 </body></html>""")
 
