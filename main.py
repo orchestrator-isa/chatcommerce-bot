@@ -847,7 +847,7 @@ def t(key: str, lang: str = "es", **kwargs) -> str:
 # Capacidad máxima de una mesa normal (sin contar salones virtuales)
 ITEMS_PER_PAGE = 30
 MAX_CAPACIDAD_MESA_NORMAL = 6
-CAPACIDAD_SALON = 30  # ← añade esta línea
+CAPACIDAD_SALON = 30
 
 
 async def get_menu_page(
@@ -1001,7 +1001,6 @@ async def process_msg(payload: dict):
     except (KeyError, IndexError) as e:
         logger.error(f"Error al procesar payload: {e}")
         return
-    # Nuevo try que abarca toda la lógica del bot
     try:
         phone = msg["from"]
         txt_raw = msg["text"]["body"].strip()
@@ -1140,6 +1139,13 @@ async def process_msg(payload: dict):
                     reply = t("address_request", lang)
                 else:
                     reply = t("delivery_type", lang)
+                # Guardar contexto y enviar
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "direccion":
                 if txt in ("1", "recoger", "pick up", "pickup", "recogida"):
                     ctx["pedido_temp"]["tipo"] = "recoger"
@@ -1160,6 +1166,12 @@ async def process_msg(payload: dict):
                     )
                 else:
                     reply = t("invalid_zone", lang)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "pago":
                 tipo = ctx["pedido_temp"].get("tipo", "recoger")
                 items = ctx.get("carrito", [])
@@ -1280,6 +1292,12 @@ async def process_msg(payload: dict):
                         if cli.validado
                         else t("payment_method", lang)
                     )
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "cash_bill":
                 try:
                     billete = int(txt_raw)
@@ -1348,6 +1366,12 @@ async def process_msg(payload: dict):
                             return
                 except ValueError:
                     reply = t("cash_bill_request", lang)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "menu":
                 if txt in ("v", "pedido", "view", "order"):
                     cart_text, total = format_cart(ctx.get("carrito", []))
@@ -1488,6 +1512,13 @@ async def process_msg(payload: dict):
                         reply = t("res_personas", lang)
                 else:
                     reply = t("help", lang)
+                # Guardar contexto si cambió (por ejemplo, al cambiar de página)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "lang":
                 new_lang = lang_map.get(txt)
                 if new_lang:
@@ -1502,12 +1533,19 @@ async def process_msg(payload: dict):
                     reply = t("lang_selected", lang, restaurante=rname)
                 else:
                     reply = t("welcome", lang, restaurante=rname)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "res_p":
-                if (
-                    not txt or not txt.isdigit()
-                ):  # Validar que txt no esté vacío y sea un número
+                if not txt or not txt.isdigit():
                     reply = "❌ Por favor, ingresa un número válido de personas."
                     ctx["fase"] = "res_p"
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
                     await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
                     await send_wa(phone, reply)
                     return
@@ -1515,7 +1553,7 @@ async def process_msg(payload: dict):
                     result = await db.execute(
                         select(func.max(CalendarioSlot.capacidad)).where(
                             ~CalendarioSlot.mesa.in_(["SALON_A", "AREA_COMPLETA"])
-                        )  # Usar ~in_ para excluir
+                        )
                     )
                     max_mesa = result.scalar() or MAX_CAPACIDAD_MESA_NORMAL
                 except Exception as e:
@@ -1526,17 +1564,18 @@ async def process_msg(payload: dict):
                     ctx["res_personas_grande"] = num_personas
                     ctx["fase"] = "preguntar_salon"
                     reply = f"⚠️ Para grupos de más de {max_mesa} personas, solo podemos ofrecerte el salón completo (capacidad hasta {CAPACIDAD_SALON}). ¿Deseas reservar el salón? Responde *sí* o *no*."
-                    return
                 else:
                     ctx["res_personas"] = num_personas
                     ctx["fase"] = "res_f"
                     reply = t("res_fecha", lang)
-                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
-                    await send_wa(phone, reply)
-                    return
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "preguntar_salon":
                 if txt in ("si", "yes", "oui", "sí", "نعم"):
-                    # Usar la capacidad del salón (30) o la cantidad original
                     ctx["res_personas"] = ctx.get("res_personas_grande", 30)
                     ctx["fase"] = "res_f"
                     reply = t("res_fecha", lang)
@@ -1544,7 +1583,6 @@ async def process_msg(payload: dict):
                     reply = "Reserva cancelada. Puedes intentar con menos personas o contactar directamente."
                     ctx["fase"] = "menu"
                     ctx.pop("res_personas_grande", None)
-                    # Limpiar también otras claves de reserva si es necesario
                     for k in (
                         "res_personas",
                         "res_fecha",
@@ -1552,6 +1590,12 @@ async def process_msg(payload: dict):
                         "reserva_config",
                     ):
                         ctx.pop(k, None)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "res_f":
                 try:
                     fecha_obj = datetime.strptime(txt_raw, "%Y-%m-%d").date()
@@ -1568,6 +1612,12 @@ async def process_msg(payload: dict):
                         reply = t("res_hora", lang)
                 except ValueError:
                     reply = t("res_fecha", lang)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "res_h":
                 try:
                     hora_obj = datetime.strptime(txt_raw, "%H:%M").time()
@@ -1595,6 +1645,12 @@ async def process_msg(payload: dict):
                         )
                 except ValueError:
                     reply = t("res_hora", lang)
+                conv.contexto_bot = clean_serializable(ctx)
+                conv.last_message_at = now_utc()
+                await db.commit()
+                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                await send_wa(phone, reply)
+                return
             elif fase == "res_c":
                 logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
                 cfg = ctx.get("reserva_config", {})
@@ -1605,6 +1661,13 @@ async def process_msg(payload: dict):
                 if not es_grupo_grande and personas > max_guests:
                     reply = t("res_error_capacity", lang, max=max_guests)
                     ctx["fase"] = "menu"
+                    # Guardar contexto (aunque no haya continuidad, se guarda)
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
                 elif txt in ("si", "yes", "oui", "نعم"):
                     fecha_str = ctx.get("res_fecha")
                     hora_str = ctx.get("res_hora")
@@ -1615,11 +1678,14 @@ async def process_msg(payload: dict):
                     except ValueError:
                         reply = "❌ Formato de fecha u hora incorrecto. Usa YYYY-MM-DD y HH:MM."
                         ctx["fase"] = "res_f"
+                        conv.contexto_bot = clean_serializable(ctx)
+                        conv.last_message_at = now_utc()
+                        await db.commit()
                         await guardar_mensaje(
                             db, conv.id_conversacion, "outbound", reply
                         )
                         await send_wa(phone, reply)
-                        return  # ✅ Sale de la función
+                        return
                     disp = await verificar_disponibilidad(
                         db, rid, fecha_obj, hora_obj, personas
                     )
@@ -1636,15 +1702,15 @@ async def process_msg(payload: dict):
                         else:
                             reply = "❌ Sin disponibilidad ese día."
                             ctx["fase"] = "res_f"
+                        conv.contexto_bot = clean_serializable(ctx)
+                        conv.last_message_at = now_utc()
+                        await db.commit()
                         await guardar_mensaje(
                             db, conv.id_conversacion, "outbound", reply
                         )
                         await send_wa(phone, reply)
-                        return  # ✅ Sale de la función
-                    logger.info(
-                        f"DEBUG: Sin disponibilidad saliendo de res_c con txt={txt}"
-                    )
-                    # Si hay disponibilidad, continua con la lógica de reserva...
+                        return
+                    # Si hay disponibilidad, crear reserva
                     codigo = (
                         f"RES-{now_utc().strftime('%Y%m%d')}-{now_utc().second:02d}"
                     )
@@ -1664,7 +1730,6 @@ async def process_msg(payload: dict):
                     )
                     db.add(res)
                     await db.flush()
-                    logger.info(f"Debug: Reserva creada con ID {res.id_reserva}")
                     bloqueado = await bloquear_mesa_temporal(
                         db,
                         res.id_reserva,
@@ -1674,7 +1739,6 @@ async def process_msg(payload: dict):
                         disp["mesa"],
                         disp["zona"],
                     )
-                    logger.info(f"DEBUG: Bloqueo exitoso = {bloqueado}")
                     if not bloqueado:
                         await db.rollback()
                         reply = "❌ Error interno. Inténtalo de nuevo."
@@ -1695,7 +1759,12 @@ async def process_msg(payload: dict):
                             "res_personas_grande",
                         ):
                             ctx.pop(k, None)
-                    logger.info("DEBUG: Flujo completado, enviando respuesta")
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
+                    await db.commit()
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
                 else:
                     reply = t("res_cancel", lang)
                     ctx["fase"] = "menu"
@@ -1706,18 +1775,14 @@ async def process_msg(payload: dict):
                         "reserva_config",
                     ):
                         ctx.pop(k, None)
-                        logger.info(f"DEBUG: Entrando a res_c con txt={txt}")
-            if reply:
-                conv.contexto_bot = clean_serializable(ctx)
-                conv.last_message_at = now_utc()
-                try:
+                    conv.contexto_bot = clean_serializable(ctx)
+                    conv.last_message_at = now_utc()
                     await db.commit()
-                except Exception as e_inner:
-                    logger.error(f"❌ Error commit final: {e_inner}", exc_info=True)
-                    await db.rollback()
-                await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
-                await send_wa(phone, reply)
-
+                    await guardar_mensaje(db, conv.id_conversacion, "outbound", reply)
+                    await send_wa(phone, reply)
+                    return
+            # Fin de fases
+            # Si por algún motivo se llegara aquí sin reply, se ignora
     except Exception as e:
         logger.error(f"Webhook error (outer): {e}", exc_info=True)
 
@@ -2532,9 +2597,6 @@ async def reservas_pendientes(
         raise HTTPException(503, "DB offline")
     async with async_session_maker() as db:
         today = datetime.now(timezone.utc).date()
-        # Devuelve:
-        # - Todas las solicitudes (estado 'solicitada') para cualquier fecha futura o pasada (pero normalmente futura)
-        # - Las reservas confirmadas de hoy (para que el recepcionista sepa quién viene hoy)
         res = await db.execute(
             select(Reservacion)
             .where(
@@ -2657,7 +2719,7 @@ async function loadRecepcion() {
           <td class="p-2 border border-gray-600"><span class="px-2 py-1 rounded text-xs ${x.estado=='solicitada'?'bg-yellow-500 text-black':x.estado=='confirmada'?'bg-green-500 text-black':'bg-red-500 text-black'}">${x.estado}</span></td>
           <td class="p-2 border border-gray-600">${x.estado=='solicitada' ? `<button onclick="confirmarReserva('${x.id}')" class="bg-blue-500 hover:bg-blue-600 text-white px-2 py-1 rounded text-sm">✓ Confirmar</button>
           <button onclick="rechazarReserva('${x.id}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-sm ml-2">✕</button>` : '-'}</td>
-        </table>
+        </tr>
       `).join('')
       : '<tr><td colspan="6" class="p-4 text-center text-gray-400">Sin reservas pendientes ni confirmadas hoy</td></tr>';
 
